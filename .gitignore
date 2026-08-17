@@ -59,6 +59,7 @@ venv.bak/
 *~
 
 # Datos genomicos grandes
+*.fasta
 *.fastq
 *.fastq.gz
 *.bam
