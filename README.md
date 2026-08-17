@@ -54,11 +54,52 @@ Genoly-GPU/
 │   └── seqdump.txt               # Isoformas del gen BRCA1 (ejemplo)
 ├── tests/
 │   └── test_smoke.py             # Tests de humo de todos los módulos
+├── ui/
+│   ├── backend/                  # API REST FastAPI
+│   │   ├── main.py
+│   │   └── routers/              # device, qc, kmer, variants
+│   └── frontend/                 # UI React + Vite + Tailwind
+│       └── src/                  # páginas y componentes
 ├── fetchingfasta.py              # Descarga de FASTA desde NCBI por accession
 ├── clean_fetching.py             # Descarga de FASTA desde una URL directa
 ├── setup_genoly.ps1              # Script de instalación/estructura para Windows
 └── requirements.txt
 ```
+
+## Interfaz gráfica (UI)
+
+Genoly-GPU incluye una interfaz web moderna construida con **React + Vite + Tailwind** y un backend **FastAPI** que expone los módulos GPU como API REST.
+
+| Ruta | Funcionalidad |
+|---|---|
+| `/` | Dashboard con estado del dispositivo y accesos. |
+| `/device` | Detección de GPU NVIDIA (nvidia-smi), driver, CUDA y build de PyTorch recomendada. |
+| `/qc` | Control de calidad: GC content, composición y calidad Phred. |
+| `/kmer` | Conteo de k-mers, espectro y estimación de tamaño de genoma. |
+| `/variants` | Pileup y llamada de variantes (SNV/deleciones). |
+
+### Puesta en marcha
+
+Requisitos: Node.js 18+ y las dependencias de Python (ver arriba).
+
+```bash
+# 1. Backend (FastAPI + uvicorn)
+pip install -r ui/backend/requirements.txt
+python -m uvicorn ui.backend.main:app --host 0.0.0.0 --port 8000
+# Documentación de la API: http://localhost:8000/docs
+
+# 2. Frontend (dev con hot-reload)
+cd ui/frontend
+npm install
+npm run dev        # http://localhost:5173
+
+# 3. Producción: compilar y servir desde el backend
+npm run build      # genera ui/frontend/dist
+# el backend sirve el frontend compilado en http://localhost:8000
+```
+
+> [!TIP]
+> Durante desarrollo, Vite redirige `/api/*` a `http://127.0.0.1:8000` automáticamente, así que no necesitas configurar CORS manualmente.
 
 ## Requisitos
 
