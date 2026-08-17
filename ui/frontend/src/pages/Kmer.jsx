@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api.js'
-import { Card, StatCard, Badge } from '../components/ui.jsx'
+import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
 
 const SAMPLE =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n' +
@@ -38,13 +38,12 @@ export default function Kmer() {
   const maxMult = Math.max(...Object.keys(spectrum).map(Number), 1)
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-extrabold text-white">K-mers</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Conteo y espectro de k-mers acelerado por GPU (convolución 1D)
-        </p>
-      </header>
+    <div className="space-y-8">
+      <PageHeader
+        index="04 · Análisis"
+        title="K-mers"
+        subtitle="Conteo y espectro de k-mers acelerado por GPU (convolución 1D)"
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
@@ -70,10 +69,10 @@ export default function Kmer() {
                 />
               </div>
               <div className="flex items-end pb-1">
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-dim">
                   <input
                     type="checkbox"
-                    className="h-4 w-4 accent-indigo-500"
+                    className="h-4 w-4 accent-accent"
                     checked={canonical}
                     onChange={(e) => setCanonical(e.target.checked)}
                   />
@@ -104,7 +103,7 @@ export default function Kmer() {
 
         <div className="space-y-4 lg:col-span-2">
           {error && (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+            <div className="rounded-lg border border-bad/40 bg-bad/10 px-4 py-3 text-sm text-bad">
               {error}
             </div>
           )}
@@ -114,7 +113,7 @@ export default function Kmer() {
               <Card
                 title="Top k-mers"
                 subtitle="Los más frecuentes"
-                actions={<Badge tone="indigo">k={result.k}</Badge>}
+                actions={<Badge tone="accent">k={result.k}</Badge>}
               >
                 <table className="table-base">
                   <thead>
@@ -127,7 +126,7 @@ export default function Kmer() {
                   <tbody>
                     {result.top_kmers.map((km, i) => (
                       <tr key={i}>
-                        <td className="text-slate-500">{i + 1}</td>
+                        <td className="text-ink-faint">{i + 1}</td>
                         <td className="font-mono text-accent-glow">{km.kmer}</td>
                         <td className="text-right font-mono">{km.count.toLocaleString()}</td>
                       </tr>
@@ -143,17 +142,19 @@ export default function Kmer() {
                     .map(([mult, freq]) => (
                       <div key={mult} className="flex flex-1 flex-col items-center gap-1">
                         <div
-                          className="w-full rounded-t bg-gradient-to-t from-accent to-accent-soft"
-                          style={{ height: `${(freq / Math.max(...Object.values(spectrum))) * 100}%` }}
+                          className="w-full rounded-t bg-gradient-to-t from-accent to-accent-soft shadow-glow"
+                          style={{
+                            height: `${(freq / Math.max(...Object.values(spectrum))) * 100}%`,
+                          }}
                           title={`multiplicidad ${mult}: ${freq} k-mers`}
                         />
                         {Object.keys(spectrum).length <= 20 && (
-                          <span className="text-[10px] text-slate-500">{mult}</span>
+                          <span className="text-[10px] text-ink-faint">{mult}</span>
                         )}
                       </div>
                     ))}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-ink-faint">
                   El pico del espectro estima la cobertura media de la muestra.
                 </p>
               </Card>

@@ -4,24 +4,57 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
+        display: ['var(--font-display)', 'var(--font-sans)', 'sans-serif'],
+        hand: ['var(--font-hand)', 'cursive'],
       },
       colors: {
-        surface: {
-          950: '#070b14',
-          900: '#0b1120',
-          800: '#111a2e',
-          700: '#1a2540',
+        bg: 'rgb(var(--bg) / <alpha-value>)',
+        panel: {
+          DEFAULT: 'rgb(var(--panel) / <alpha-value>)',
+          2: 'rgb(var(--panel-2) / <alpha-value>)',
+        },
+        line: {
+          DEFAULT: 'rgb(var(--line) / <alpha-value>)',
+          strong: 'rgb(var(--line-strong) / <alpha-value>)',
+        },
+        ink: {
+          DEFAULT: 'rgb(var(--ink) / <alpha-value>)',
+          dim: 'rgb(var(--ink-dim) / <alpha-value>)',
+          faint: 'rgb(var(--ink-faint) / <alpha-value>)',
         },
         accent: {
-          DEFAULT: '#6366f1',
-          soft: '#818cf8',
-          glow: '#a5b4fc',
+          DEFAULT: 'rgb(var(--accent) / <alpha-value>)',
+          soft: 'rgb(var(--accent-soft) / <alpha-value>)',
+          glow: 'rgb(var(--accent-glow) / <alpha-value>)',
         },
+        'on-accent': 'rgb(var(--on-accent) / <alpha-value>)',
+        ok: {
+          DEFAULT: 'rgb(var(--ok) / <alpha-value>)',
+          soft: 'rgb(var(--ok-soft) / <alpha-value>)',
+        },
+        warn: {
+          DEFAULT: 'rgb(var(--warn) / <alpha-value>)',
+          soft: 'rgb(var(--warn-soft) / <alpha-value>)',
+        },
+        bad: {
+          DEFAULT: 'rgb(var(--bad) / <alpha-value>)',
+          soft: 'rgb(var(--bad-soft) / <alpha-value>)',
+        },
+        'base-a': 'rgb(var(--base-a) / <alpha-value>)',
+        'base-c': 'rgb(var(--base-c) / <alpha-value>)',
+        'base-g': 'rgb(var(--base-g) / <alpha-value>)',
+        'base-t': 'rgb(var(--base-t) / <alpha-value>)',
+        'base-n': 'rgb(var(--base-n) / <alpha-value>)',
       },
       boxShadow: {
-        card: '0 1px 0 0 rgba(255,255,255,0.04), 0 8px 24px -12px rgba(0,0,0,0.6)',
+        card: 'var(--shadow-card)',
+        glow: 'var(--shadow-glow)',
+      },
+      backgroundImage: {
+        'grid-faint':
+          'linear-gradient(rgb(var(--line) / 0.18) 1px, transparent 1px), linear-gradient(90deg, rgb(var(--line) / 0.18) 1px, transparent 1px)',
       },
     },
   },
