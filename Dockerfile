@@ -1,4 +1,9 @@
-# syntax=docker/dockerfile:1
+
+#   docker run -d --name genoly -p 8000:8000 genoly-gpu:latest
+#   # con puerto distinto:  docker run -d --name genoly -p 8080:8000 genoly-gpu:latest
+#
+# O con docker-compose (ya lo hace en ports: "8000:8000").
+# ============================================================================ #
 
 # ============================================================================ #
 # STAGE 1: build del frontend React (Vite + Tailwind)
@@ -20,7 +25,10 @@ RUN npm run build
 # ============================================================================ #
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 \
+# Puerto en el que escuchará uvicorn dentro del contenedor (configurable).
+ARG GENOLY_PORT=8000
+ENV GENOLY_PORT=$GENOLY_PORT \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     GENOLY_DEVICE=auto
@@ -50,9 +58,9 @@ RUN useradd --create-home --shell /usr/sbin/nologin genoly \
     && chown -R genoly:genoly /app
 USER genoly
 
-EXPOSE 8000
+EXPOSE $GENOLY_PORT
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')" || exit 1
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')" || exit 1
 
-CMD ["uvicorn", "ui.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD uvicorn ui.backend.main:app --host 0.0.0.0 --port $GENOLY_PORT
