@@ -83,6 +83,9 @@ Thumbs.db
 # Windows
 Desktop.ini
 
+# Tunel ngrok (script local de despliegue)
+start_tunnel.ps1
+
 # Descargas NCBI / archivos temporales de secuencias
 pantera
 
