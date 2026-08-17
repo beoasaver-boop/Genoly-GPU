@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
+import FastaPanel from '../components/FastaPanel.jsx'
 
 const SAMPLE =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n' +
@@ -47,6 +48,10 @@ export default function Kmer() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
+          <FastaPanel
+            onLoaded={(records) => setSequences(records.map((r) => r.sequence).join('\n'))}
+          />
+
           <Card title="Parámetros">
             <label className="label">Secuencias</label>
             <textarea

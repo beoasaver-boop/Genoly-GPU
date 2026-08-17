@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Bar, PageHeader } from '../components/ui.jsx'
+import FastaPanel from '../components/FastaPanel.jsx'
 
 const SAMPLE =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n' +
@@ -51,7 +52,12 @@ export default function Qc() {
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card title="Secuencias" subtitle="Una secuencia por línea (FASTA sin cabeceras)">
+        <div className="space-y-4">
+          <FastaPanel
+            onLoaded={(records) => setSequences(records.map((r) => r.sequence).join('\n'))}
+          />
+
+          <Card title="Secuencias" subtitle="Una secuencia por línea (FASTA sin cabeceras)">
           <textarea
             className="input h-56 font-mono"
             value={sequences}
@@ -67,6 +73,7 @@ export default function Qc() {
             </button>
           </div>
         </Card>
+        </div>
 
         <div className="space-y-4 lg:col-span-2">
           {error && (

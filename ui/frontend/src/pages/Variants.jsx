@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
+import FastaPanel from '../components/FastaPanel.jsx'
 
 const REF =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'
@@ -64,6 +65,10 @@ export default function Variants() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
+          <FastaPanel
+            onLoaded={(records) => setReference(records[0].sequence)}
+          />
+
           <Card title="Entrada">
             <label className="label">Referencia</label>
             <textarea
