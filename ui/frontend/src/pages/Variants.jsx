@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api.js'
-import { Card, StatCard, Badge, Bar } from '../components/ui.jsx'
+import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
 
 const REF =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'
@@ -13,7 +13,7 @@ const READS_SAMPLE = (() => {
   return lines.join('\n')
 })()
 
-const TYPE_TONE = { SNV: 'amber', DEL: 'rose' }
+const TYPE_TONE = { SNV: 'warn', DEL: 'bad' }
 
 export default function Variants() {
   const [reference, setReference] = useState(REF)
@@ -55,13 +55,12 @@ export default function Variants() {
   }
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-extrabold text-white">Variantes</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Pileup y llamada de SNVs/deleciones sobre GPU
-        </p>
-      </header>
+    <div className="space-y-8">
+      <PageHeader
+        index="05 · Análisis"
+        title="Variantes"
+        subtitle="Pileup y llamada de SNVs/deleciones sobre GPU"
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
@@ -74,9 +73,7 @@ export default function Variants() {
               spellCheck={false}
             />
 
-            <label className="label mt-3">
-              Lecturas — formato: secuencia,start,strand
-            </label>
+            <label className="label mt-3">Lecturas — formato: secuencia,start,strand</label>
             <textarea
               className="input h-44 font-mono"
               value={readsText}
@@ -117,7 +114,7 @@ export default function Variants() {
 
         <div className="space-y-4 lg:col-span-2">
           {error && (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+            <div className="rounded-lg border border-bad/40 bg-bad/10 px-4 py-3 text-sm text-bad">
               {error}
             </div>
           )}
@@ -133,10 +130,11 @@ export default function Variants() {
 
               <Card
                 title="Variantes detectadas"
-                actions={<Badge tone="indigo">{result.total_variants} resultados</Badge>}
+                subtitle="SNVs y deleciones sobre la referencia"
+                actions={<Badge tone="accent">{result.total_variants} resultados</Badge>}
               >
                 {result.variants.length === 0 ? (
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-ink-faint">
                     No se detectaron variantes con los umbrales actuales.
                   </p>
                 ) : (
@@ -173,15 +171,13 @@ export default function Variants() {
 
           {!result && !error && (
             <Card title="Ayuda">
-              <p className="text-sm text-slate-500">
-                El pileup acumula las bases de cada lectura sobre la referencia usando
-                operaciones de dispersión en GPU y compara el consenso contra la referencia.
+              <p className="text-sm text-ink-faint">
+                El pileup acumula las bases de cada lectura sobre la referencia usando operaciones
+                de dispersión en GPU y compara el consenso contra la referencia.
               </p>
-              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-400">
+              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-ink-dim">
                 <li>Las lecturas deben estar alineadas (posición 0-based y hebra).</li>
-                <li>
-                  SNV: consenso ≠ referencia con profundidad y frecuencia suficientes.
-                </li>
+                <li>SNV: consenso ≠ referencia con profundidad y frecuencia suficientes.</li>
                 <li>DEL: región de referencia sin cobertura flanqueada por lecturas.</li>
               </ul>
             </Card>

@@ -84,7 +84,6 @@ Desktop.ini
 
 # Descargas NCBI / archivos temporales de secuencias
 pantera
-*.html
 
 # UI (React/Vite)
 node_modules/
