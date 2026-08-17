@@ -2,17 +2,19 @@
 
 Software de aceleración por tecnología de GPU (NVIDIA por ahora) para el análisis de grandes datos del genoma.
 
-Genoly-GPU ofrece herramientas de alineamiento de secuencias de ADN/ARN, detección de variantes y análisis de mutaciones, aprovechando la aceleración de GPUs NVIDIA a través de PyTorch y CUDA.
+Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O de FASTA/FASTQ, control de calidad, conteo de k-mers, alineamiento, codificación a tensores y llamada de variantes— todo acelerado por GPUs NVIDIA a través de PyTorch y CUDA.
 
 ## Caracteristicas
 
-- Alineamiento de secuencias con el algoritmo Smith-Waterman implementado sobre PyTorch.
-- Detección automática de variantes: SNVs, inserciones y deleciones.
+- Lectura/escritura de FASTA y FASTQ en streaming (consumo de memoria reducido).
+- Codificación de secuencias a tensores enteros y one-hot sobre GPU.
+- Control de calidad: contenido GC, composición de bases y distribución de calidad Phred, con trimming y filtrado de lecturas.
+- Conteo de k-mers y espectro k-mer acelerado por GPU (convolución 1D vectorizada), con estimación de tamaño de genoma (Lander-Waterman).
+- Pileup y llamada de variantes (SNV y deleciones) sobre GPU mediante operaciones de dispersión.
+- Detección automática de la GPU NVIDIA con nvidia-smi e instalación automática de la build de PyTorch con CUDA más conveniente.
+- Alineamiento con el algoritmo Smith-Waterman implementado sobre PyTorch.
 - Análisis completo de mutaciones contra una referencia y comparación con variantes conocidas.
-- Procesamiento por lotes (batch) de pares de secuencias.
-- Codificación de secuencias a tensores numéricos para operar en GPU o CPU.
-- Generación de CIGAR strings.
-- Benchmark de rendimiento GPU vs CPU.
+- Generación de CIGAR strings y benchmark de rendimiento GPU vs CPU.
 - Utilidades para descargar secuencias FASTA desde NCBI.
 
 > [!NOTE]
@@ -27,18 +29,35 @@ Genoly-GPU ofrece herramientas de alineamiento de secuencias de ADN/ARN, detecci
 Genoly-GPU/
 ├── Genoly/
 │   ├── __init__.py
+│   ├── core/
+│   │   ├── device.py             # DeviceManager: detección y gestión de GPU/CUDA
+│   │   └── gpu_setup.py          # Auto-detección nvidia-smi e instalación de PyTorch CUDA
+│   ├── io/
+│   │   ├── fasta.py              # Lectura/escritura FASTA en streaming
+│   │   └── fastq.py              # Lectura/escritura FASTQ con calidad Phred
+│   ├── encoding/
+│   │   └── encoder.py            # Codificación a tensores enteros y one-hot
+│   ├── qc/
+│   │   └── quality.py            # GC content, composición, calidad y filtrado
+│   ├── kmer/
+│   │   └── kmers.py              # Conteo de k-mers y espectro en GPU
+│   ├── variants/
+│   │   └── caller.py             # Pileup y llamada de variantes en GPU
 │   └── alignment/
-│       ├── alignment.py         # Clase principal GPUSequenceAligner
-│       ├── alignment_wExa.py    # Versión con analizador de mutaciones simplificado
-│       └── __init__.py
+│       ├── alignment.py          # Clase principal GPUSequenceAligner
+│       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
 ├── examples/
-│   ├── examp1.py                # Ejemplo completo de uso del alineador
-│   ├── analisis1.py             # Análisis FASTA: composición y contenido GC
-│   ├── analisis2.py             # Sitios de restricción y motivos consenso
-│   └── seqdump.txt              # Secuencia de ejemplo
-├── fetchingfasta.py             # Descarga de FASTA desde NCBI por accession
-├── clean_fetching.py            # Descarga de FASTA desde una URL directa
-└── setup_genoly.ps1             # Script de instalación/estructura para Windows
+│   ├── pipeline_completo.py      # Pipeline completo: I/O -> QC -> k-mers -> variantes
+│   ├── examp1.py                 # Ejemplo de uso del alineador
+│   ├── analisis1.py              # Análisis FASTA: composición y contenido GC
+│   ├── analisis2.py              # Sitios de restricción y motivos consenso
+│   └── seqdump.txt               # Isoformas del gen BRCA1 (ejemplo)
+├── tests/
+│   └── test_smoke.py             # Tests de humo de todos los módulos
+├── fetchingfasta.py              # Descarga de FASTA desde NCBI por accession
+├── clean_fetching.py             # Descarga de FASTA desde una URL directa
+├── setup_genoly.ps1              # Script de instalación/estructura para Windows
+└── requirements.txt
 ```
 
 ## Requisitos
@@ -62,8 +81,61 @@ Dependencias opcionales para los ejemplos:
 > Si ya tienes una GPU NVIDIA pero PyTorch fue instalado sin soporte CUDA, reinstálalo con el índice correcto:
 >
 > ```bash
-> pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+> pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 > ```
+
+## Setup de GPU NVIDIA (auto-detección e instalación)
+
+Genoly-GPU incluye un módulo que consulta `nvidia-smi` para detectar el driver y la versión de CUDA, y recomienda (o instala) automáticamente la build de PyTorch con CUDA más conveniente. Esto evita que PyTorch no detecte la GPU de NVIDIA y el pipeline caiga a CPU.
+
+### Comprobación
+
+```bash
+python -m Genoly.core.gpu_setup
+```
+
+Salida de ejemplo:
+
+```
+GPU: GeForce RTX 3050
+Driver: 591.59 | CUDA del driver: 13.1
+Build de PyTorch compatible recomendada: cu130
+PyTorch: 2.13.0+cu126 | torch.cuda.is_available()=True
+GPU activa: NVIDIA GeForce RTX 3050 6GB Laptop GPU (compute (8, 6))
+Estado OK: PyTorch usa CUDA.
+```
+
+### Instalación automática
+
+```bash
+# Ver el comando pip recomendado sin ejecutarlo
+python -m Genoly.core.gpu_setup --install --dry-run
+
+# Ejecutar la instalación de la build recomendada
+python -m Genoly.core.gpu_setup --install
+
+# Forzar una build concreta
+python -m Genoly.core.gpu_setup --install --tag cu126
+```
+
+> [!IMPORTANT]
+> El driver NVIDIA es retrocompatible: una build `cuXXX` de PyTorch funciona si el driver soporta CUDA >= XXX (lo que reporta `nvidia-smi`). El módulo elige la build más reciente que tu driver soporte.
+
+> [!CAUTION]
+> `--install` modifica el entorno Python actual (reinstala `torch`/`torchvision`). Se recomienda ejecutarlo dentro de un entorno virtual. Usa `--dry-run` primero para revisar el comando.
+
+### Uso programático
+
+```python
+from Genoly import GpuSetup
+
+# Verificar y, si hace falta, instalar la build correcta
+GpuSetup.ensure_cuda_torch(auto_install=True)
+
+# Solo inspeccionar
+info = GpuSetup.detect_nvidia()
+print(info.gpu_name, info.driver_version, info.cuda_version)
+```
 
 ## Instalación
 
@@ -95,31 +167,52 @@ pip install -r requirements.txt
 ## Uso rápido
 
 ```python
+from Genoly import (
+    DeviceManager,
+    SequenceEncoder,
+    QualityAnalyzer,
+    KmerCounter,
+    VariantCaller,
+    Read,
+)
 from Genoly.alignment.alignment import GPUSequenceAligner
 
+# 1. Dispositivo
+manager = DeviceManager()          # auto-detecta CUDA
+manager.print_info()
+
+# 2. Codificación a tensores GPU
+encoder = SequenceEncoder()
+tensor, lengths = encoder.encode(["ACGTACGTACGT", "TTTTGGGGCCCC"])
+one_hot = encoder.encode_one_hot(["ACGTACGTACGT"])
+print(tensor.device, tuple(one_hot.shape))
+
+# 3. Control de calidad
+qa = QualityAnalyzer()
+gc = qa.gc_content_percent(["GCGCATACGTACGT"]).item()
+print(f"GC: {gc:.1f}%")
+
+# 4. K-mers
+kc = KmerCounter()
+values, counts = kc.count(["ACGTACGTACGTACGTACGTACGT"], k=8)
+
+# 5. Llamada de variantes
+vc = VariantCaller()
+reads = [Read(sequence="ACGTACGTTCGTACGT", start=0) for _ in range(20)]
+variants = vc.call_variants("ACGTACGTACGTACGT", reads, min_depth=5)
+
+# 6. Alineamiento
 aligner = GPUSequenceAligner()
-
-referencia = "GATCTTTCTCCACAGCACGGGGAACAGCTCCGGAAAGAGTGTCT"
-paciente = "GATCTTTCTCCACAGCACGGGGAACAGCTCCGGAAAGAGTGTCA"
-
-# Alineamiento simple
-resultado = aligner.align_pair(paciente, referencia)
-print(f"Score: {resultado.score:.1f}")
-print(f"Identidad: {resultado.identity_percent:.1f}%")
-print(f"CIGAR: {resultado.cigar_string}")
-
-# Análisis de mutaciones con variantes conocidas
-analisis = aligner.analyze_mutations(
-    query=paciente,
-    target=referencia,
-    known_variants=[{'position': 37, 'ref': 'T', 'alt': 'A'}]
-)
-print(analisis['statistics'])
+result = aligner.align_pair("ACGTACGT", "ACGTTCGT")
+print(result.cigar_string)
 ```
 
 ## Ejemplos
 
 ```bash
+# Pipeline completo: I/O -> QC -> k-mers -> variantes
+python examples/pipeline_completo.py
+
 # Ejemplo completo del alineador
 python examples/examp1.py
 
@@ -136,7 +229,90 @@ python fetchingfasta.py
 > [!WARNING]
 > Los ejemplos `analisis1.py` y `analisis2.py` leen archivos locales (`seqdump.txt` y `ejemplo.fasta`). Asegúrate de que dichos archivos existan en el directorio de trabajo antes de ejecutarlos.
 
+## Tests
+
+```bash
+python tests/test_smoke.py
+# o con pytest
+python -m pytest tests -v
+```
+
 ## Clases principales
+
+### GpuSetup
+
+Detección de la GPU NVIDIA con `nvidia-smi` e instalación automática de la build de PyTorch con CUDA adecuada.
+
+| Método | Descripción |
+|---|---|
+| `detect_nvidia()` | Consulta nvidia-smi: driver, CUDA, GPU y memoria. |
+| `recommend_cuda_tag(cuda_version)` | Elige la build `cuXXX` más conveniente para el driver. |
+| `torch_status()` | Estado del PyTorch instalado (¿detecta CUDA?). |
+| `install_command(cuda_tag)` | Genera el comando pip correspondiente. |
+| `install_cuda_torch(cuda_tag, dry_run)` | Instala (o muestra) la build recomendada. |
+| `ensure_cuda_torch(auto_install)` | Orquesta verificación + instalación automática. |
+
+También existe la función de conveniencia `recommend_cuda_tag(cuda_version)`.
+
+### DeviceManager
+
+Gestión del dispositivo de cómputo (CUDA/NVIDIA o CPU). Centraliza la auto-detección.
+
+| Método | Descripción |
+|---|---|
+| `print_info()` | Imprime GPU, memoria, compute capability y versión CUDA. |
+| `get_gpu_info()` | Devuelve `GPUInfo` con los datos del dispositivo. |
+| `synchronize()` | Sincroniza CUDA (para mediciones de tiempo). |
+| `empty_cache()` | Libera memoria caché de CUDA. |
+
+### SequenceEncoder
+
+Codifica secuencias de ADN/ARN a tensores listos para GPU.
+
+| Método | Descripción |
+|---|---|
+| `encode(sequences)` | Codifica un lote a tensor entero (B, L) + longitudes. |
+| `encode_one_hot(sequences)` | Codifica un lote a one-hot (B, L, C). |
+| `decode(tensor, lengths)` | Convierte índices de vuelta a secuencias de texto. |
+
+### QualityAnalyzer
+
+Control de calidad sobre GPU.
+
+| Método | Descripción |
+|---|---|
+| `gc_content(sequences)` | Contenido GC por secuencia (tensor). |
+| `base_composition(sequences)` | Conteo total de A/C/G/T/N. |
+| `quality_distribution(records)` | Media de calidad Phred por posición. |
+| `trim_by_quality(records, ...)` | Recorte 3' por ventana deslizante. |
+| `filter_by_quality(records, ...)` | Filtro por calidad, longitud y ratio de N. |
+| `report(records)` / `summarize(records)` | Reporte completo / resumen impreso. |
+
+### KmerCounter
+
+Conteo de k-mers acelerado por GPU (codificación base-4 + convolución 1D).
+
+| Método | Descripción |
+|---|---|
+| `count(sequences, k, canonical)` | Frecuencia de cada k-mer (canónico opcional). |
+| `decode_kmer(code, k)` | Convierte un código entero a secuencia de texto. |
+| `spectrum(sequences, k)` | Distribución de k-mers por multiplicidad. |
+| `estimate_genome_size(sequences, k)` | Estimación de tamaño de genoma (Lander-Waterman). |
+
+> [!TIP]
+> Los k-mers se codifican como enteros en base 4 (A=0, C=1, G=2, T=3). Con `canonical=True` se cuenta cada k-mer junto a su reverse complement, lo que evita dobles conteos en datos de doble hebra.
+
+### VariantCaller
+
+Pileup y llamada de variantes acelerado por GPU.
+
+| Método | Descripción |
+|---|---|
+| `pileup(reference, reads)` | Cobertura y conteos de bases por posición. |
+| `call_variants(reference, reads, ...)` | Llama SNVs y deleciones con umbrales de profundidad y frecuencia. |
+
+> [!IMPORTANT]
+> El caller asume lecturas ya alineadas a la referencia: cada `Read` indica su secuencia, la posición 0-based de inicio y la hebra (`+`/`-`). Las posiciones reportadas en las variantes son 1-based.
 
 ### GPUSequenceAligner
 
@@ -187,10 +363,14 @@ python clean_fetching.py
 
 ## Hoja de ruta
 
-- [ ] Soporte real de paralelización por lotes en GPU.
-- [ ] Carga de archivos FASTQ/FASTA directamente.
-- [ ] Análisis de calidad (scores Phred).
-- [ ] Procesamiento en streaming para datasets masivos.
+- [x] Carga de archivos FASTQ/FASTA en streaming.
+- [x] Análisis de calidad (scores Phred), trimming y filtrado.
+- [x] Conteo de k-mers y espectro k-mer en GPU.
+- [x] Llamada de variantes (SNV/deleciones) en GPU.
+- [x] Auto-detección de la GPU e instalación automática de PyTorch CUDA.
+- [ ] Soporte real de paralelización por lotes en GPU para el alineador.
+- [ ] Llamada de inserciones mediante CIGAR (lecturas alineadas).
+- [ ] Procesamiento en streaming para datasets masivos (chunks GPU).
 - [ ] Exportación a formatos estándar (SAM/BAM, VCF).
 
 ## Licencia
