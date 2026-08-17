@@ -63,6 +63,9 @@ Genoly-GPU/
 ├── fetchingfasta.py              # Descarga de FASTA desde NCBI por accession
 ├── clean_fetching.py             # Descarga de FASTA desde una URL directa
 ├── setup_genoly.ps1              # Script de instalación/estructura para Windows
+├── Dockerfile                    # Imagen multi-stage (frontend + API con CUDA)
+├── .dockerignore
+├── docker-compose.yml            # Orquesta el contenedor (GPU opcional)
 └── requirements.txt
 ```
 
@@ -204,6 +207,64 @@ pip install -r requirements.txt
 > source genoly_env/bin/activate
 > pip install -r requirements.txt
 > ```
+
+## Docker
+
+Genoly-GPU incluye un `Dockerfile` (multi-stage), `.dockerignore` y `docker-compose.yml` listos para levantar la API y el frontend en un contenedor.
+
+> [!TIP]
+> La imagen construye el frontend React en una primera etapa y en la segunda instala Python + PyTorch con CUDA 12.6 (la misma build probada con la RTX 3050). La API queda servida en `http://localhost:8000` con el frontend compilado en `/`.
+
+### Construir y arrancar
+
+```bash
+# Build + arranque en un solo paso
+docker compose up --build -d
+
+# Ver logs
+docker compose logs -f
+
+# Detener
+docker compose down
+```
+
+### Solo el Dockerfile
+
+```bash
+docker build -t genoly-gpu:latest .
+docker run -d --name genoly -p 8000:8000 genoly-gpu:latest
+# API:      http://localhost:8000
+# Frontend: http://localhost:8000
+# Docs:     http://localhost:8000/docs
+```
+
+### Comprobaciones
+
+```bash
+docker compose ps                  # estado y healthcheck
+curl http://localhost:8000/api/health   # {"status":"ok",...}
+curl http://localhost:8000/api/device   # GPU y CUDA detectados
+```
+
+### GPU dentro del contenedor
+
+La API funciona sin GPU (PyTorch cae a CPU automáticamente gracias a la auto-detección de Genoly). Para exponer la GPU NVIDIA al contenedor, descomenta el bloque `deploy` de `docker-compose.yml`:
+
+```yaml
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+```
+
+> [!IMPORTANT]
+> Usar GPU en Docker requiere **nvidia-container-toolkit** en el host. En Windows con WSL2 hay que instalarlo dentro de la distro WSL2 y reiniciar Docker Desktop: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+
+> [!NOTE]
+> En Docker Desktop con WSL2, si la distro ya tiene configurado el toolkit, la GPU puede estar disponible incluso sin el bloque `deploy`. Comprueba con `curl http://localhost:8000/api/device` (campo `cuda_available`).
 
 ## Uso rápido
 
@@ -409,6 +470,7 @@ python clean_fetching.py
 - [x] Conteo de k-mers y espectro k-mer en GPU.
 - [x] Llamada de variantes (SNV/deleciones) en GPU.
 - [x] Auto-detección de la GPU e instalación automática de PyTorch CUDA.
+- [x] Despliegue en contenedor Docker (API + frontend, CUDA opcional).
 - [ ] Soporte real de paralelización por lotes en GPU para el alineador.
 - [ ] Llamada de inserciones mediante CIGAR (lecturas alineadas).
 - [ ] Procesamiento en streaming para datasets masivos (chunks GPU).
