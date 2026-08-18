@@ -120,24 +120,26 @@ export default function Kmer() {
                 subtitle="Los más frecuentes"
                 actions={<Badge tone="accent">k={result.k}</Badge>}
               >
-                <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>K-mer</th>
-                      <th className="text-right">Frecuencia</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.top_kmers.map((km, i) => (
-                      <tr key={i}>
-                        <td className="text-ink-faint">{i + 1}</td>
-                        <td className="font-mono text-accent-glow">{km.kmer}</td>
-                        <td className="text-right font-mono">{km.count.toLocaleString()}</td>
+                <div className="overflow-x-auto">
+                  <table className="table-base min-w-[26rem]">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>K-mer</th>
+                        <th className="text-right">Frecuencia</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {result.top_kmers.map((km, i) => (
+                        <tr key={i}>
+                          <td className="text-ink-faint">{i + 1}</td>
+                          <td className="font-mono text-accent-glow">{km.kmer}</td>
+                          <td className="text-right font-mono">{km.count.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
 
               <Card title="Espectro k-mer" subtitle="Distribución de multiplicidades">

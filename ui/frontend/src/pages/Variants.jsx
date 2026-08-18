@@ -143,32 +143,34 @@ export default function Variants() {
                     No se detectaron variantes con los umbrales actuales.
                   </p>
                 ) : (
-                  <table className="table-base">
-                    <thead>
-                      <tr>
-                        <th>Pos</th>
-                        <th>Ref</th>
-                        <th>Alt</th>
-                        <th>Tipo</th>
-                        <th className="text-right">Frec.</th>
-                        <th className="text-right">Depth</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.variants.map((v, i) => (
-                        <tr key={i}>
-                          <td className="font-mono">{v.position}</td>
-                          <td className="font-mono">{v.ref.slice(0, 25)}</td>
-                          <td className="font-mono text-accent-glow">{v.alt}</td>
-                          <td>
-                            <Badge tone={TYPE_TONE[v.type]}>{v.type}</Badge>
-                          </td>
-                          <td className="text-right font-mono">{v.freq.toFixed(2)}</td>
-                          <td className="text-right font-mono">{v.depth}</td>
+                  <div className="overflow-x-auto">
+                    <table className="table-base min-w-[30rem]">
+                      <thead>
+                        <tr>
+                          <th>Pos</th>
+                          <th>Ref</th>
+                          <th>Alt</th>
+                          <th>Tipo</th>
+                          <th className="text-right">Frec.</th>
+                          <th className="text-right">Depth</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {result.variants.map((v, i) => (
+                          <tr key={i}>
+                            <td className="font-mono">{v.position}</td>
+                            <td className="font-mono">{v.ref.slice(0, 25)}</td>
+                            <td className="font-mono text-accent-glow">{v.alt}</td>
+                            <td>
+                              <Badge tone={TYPE_TONE[v.type]}>{v.type}</Badge>
+                            </td>
+                            <td className="text-right font-mono">{v.freq.toFixed(2)}</td>
+                            <td className="text-right font-mono">{v.depth}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </Card>
             </>
