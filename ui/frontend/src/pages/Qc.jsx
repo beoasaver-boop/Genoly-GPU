@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api.js'
-import { Card, StatCard, Bar, PageHeader } from '../components/ui.jsx'
+import { Card, StatCard, Bar, Badge, PageHeader } from '../components/ui.jsx'
 import FastaPanel from '../components/FastaPanel.jsx'
 
 const SAMPLE =
@@ -17,8 +17,18 @@ const COLORS = {
   N: 'bg-base-n',
 }
 
+function FileRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5">
+      <dt className="text-sm text-ink-faint">{label}</dt>
+      <dd className="truncate font-mono text-sm text-ink">{value ?? '—'}</dd>
+    </div>
+  )
+}
+
 export default function Qc() {
   const [sequences, setSequences] = useState(SAMPLE)
+  const [upload, setUpload] = useState(null)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -27,11 +37,17 @@ export default function Qc() {
     setLoading(true)
     setError(null)
     try {
-      const seqs = sequences
-        .split('\n')
-        .map((s) => s.trim().toUpperCase())
-        .filter((s) => s.length > 0)
-      const res = await api.analyzeQc({ sequences: seqs })
+      let payload
+      if (upload) {
+        payload = { upload_id: upload.uploadId }
+      } else {
+        const seqs = sequences
+          .split('\n')
+          .map((s) => s.trim().toUpperCase())
+          .filter((s) => s.length > 0)
+        payload = { sequences: seqs }
+      }
+      const res = await api.analyzeQc(payload)
       setResult(res)
     } catch (e) {
       setError(e.message)
@@ -54,25 +70,50 @@ export default function Qc() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
           <FastaPanel
-            onLoaded={(records) => setSequences(records.map((r) => r.sequence).join('\n'))}
+            onLoaded={(info) => {
+              if (info.mode === 'inline') {
+                setUpload(null)
+                setSequences(info.records.map((r) => r.sequence).join('\n'))
+              } else {
+                setUpload(info)
+                setResult(null)
+              }
+            }}
           />
 
-          <Card title="Secuencias" subtitle="Una secuencia por línea (FASTA sin cabeceras)">
-          <textarea
-            className="input h-56 font-mono"
-            value={sequences}
-            onChange={(e) => setSequences(e.target.value)}
-            spellCheck={false}
-          />
-          <div className="mt-3 flex items-center justify-between">
-            <span className="text-xs text-ink-faint">
-              {sequences.trim() ? sequences.trim().split('\n').length : 0} secuencias
-            </span>
-            <button className="btn-primary" onClick={analyze} disabled={loading}>
-              {loading ? 'Analizando…' : 'Analizar'}
-            </button>
-          </div>
-        </Card>
+          {upload ? (
+            <Card
+              title="Archivo cargado"
+              subtitle="Se analiza en streaming desde el servidor, sin cargar el archivo en memoria"
+              actions={<Badge tone="ok">streaming</Badge>}
+            >
+              <dl>
+                <FileRow label="Archivo" value={upload.source} />
+                <FileRow label="Registros" value={upload.recordCount} />
+                <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+              </dl>
+              <button className="btn-ghost mt-3 w-full" onClick={() => setUpload(null)}>
+                Usar texto manual
+              </button>
+            </Card>
+          ) : (
+            <Card title="Secuencias" subtitle="Una secuencia por línea (FASTA sin cabeceras)">
+              <textarea
+                className="input h-56 font-mono"
+                value={sequences}
+                onChange={(e) => setSequences(e.target.value)}
+                spellCheck={false}
+              />
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-xs text-ink-faint">
+                  {sequences.trim() ? sequences.trim().split('\n').length : 0} secuencias
+                </span>
+                <button className="btn-primary" onClick={analyze} disabled={loading}>
+                  {loading ? 'Analizando…' : 'Analizar'}
+                </button>
+              </div>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-4 lg:col-span-2">
@@ -85,7 +126,7 @@ export default function Qc() {
           {!result && !error && (
             <Card>
               <p className="text-sm text-ink-faint">
-                Introduce secuencias y pulsa{' '}
+                Introduce secuencias o carga un .fasta y pulsa{' '}
                 <span className="font-semibold text-accent-glow">Analizar</span> para calcular el
                 contenido GC y la composición de bases en GPU.
               </p>

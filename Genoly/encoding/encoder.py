@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from typing import List, Optional, Tuple, Dict
 
@@ -36,6 +37,22 @@ class SequenceEncoder:
         self.to_idx.setdefault('U', self.to_idx['T'])
         self.num_classes = len(self.alphabet)
 
+        # Tabla ASCII (256) -> índice, para codificar sin bucles Python
+        self._lookup = self._build_lookup()
+
+    def _build_lookup(self) -> np.ndarray:
+        """Tabla de traducción vectorizada ASCII -> índice (256 entradas)."""
+        lookup = np.full(256, self.to_idx['N'], dtype=np.int64)
+        for i in range(256):
+            ch = chr(i)
+            idx = self.to_idx.get(ch)
+            if idx is None:
+                idx = self.to_idx.get(ch.upper())
+            if idx is None:
+                idx = self.to_idx['N']
+            lookup[i] = idx
+        return lookup
+
     # ------------------------------------------------------------------ #
     # Codificación a enteros
     # ------------------------------------------------------------------ #
@@ -47,21 +64,29 @@ class SequenceEncoder:
         """
         Codifica una secuencia a tensor 1D en el dispositivo.
 
+        La codificación es vectorizada (tabla ASCII -> índice), sin
+        bucles Python por base, por lo que soporta secuencias de
+        cientos de megabases sin degradación catastrófica.
+
         Args:
             sequence: Secuencia de ADN/ARN.
 
         Returns:
             Tensor de tipo long con la secuencia codificada.
         """
-        encoded = torch.zeros(len(sequence), dtype=torch.long, device=self.device)
-        for i, nuc in enumerate(sequence.upper()):
-            encoded[i] = self.encode_char(nuc)
-        return encoded
+        if not sequence:
+            return torch.zeros(0, dtype=torch.long, device=self.device)
+        data = sequence.encode('latin-1', errors='replace')
+        arr = np.frombuffer(data, dtype=np.uint8)
+        return torch.from_numpy(self._lookup[arr]).to(self.device)
 
     def encode(self, sequences: List[str],
                padding: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Codifica un lote de secuencias con padding.
+
+        La codificación es vectorizada (tabla ASCII -> índice), sin
+        bucles Python por base, para soportar secuencias gigantes.
 
         Args:
             sequences: Lista de secuencias.
@@ -81,8 +106,12 @@ class SequenceEncoder:
                              dtype=torch.long, device=self.device)
 
         for i, seq in enumerate(sequences):
-            seq_enc = self.encode_sequence(seq)
-            encoded[i, :len(seq_enc)] = seq_enc
+            if not seq:
+                continue
+            data = seq.encode('latin-1', errors='replace')
+            arr = np.frombuffer(data, dtype=np.uint8)
+            codes = torch.from_numpy(self._lookup[arr]).to(self.device)
+            encoded[i, :codes.shape[0]] = codes
 
         lengths_tensor = torch.tensor(lengths, dtype=torch.long, device=self.device)
         return encoded, lengths_tensor

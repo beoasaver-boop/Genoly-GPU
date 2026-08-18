@@ -9,8 +9,18 @@ const SAMPLE =
   'TATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATA\n' +
   'CGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCG'
 
+function FileRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5">
+      <dt className="text-sm text-ink-faint">{label}</dt>
+      <dd className="truncate font-mono text-sm text-ink">{value ?? '—'}</dd>
+    </div>
+  )
+}
+
 export default function Kmer() {
   const [sequences, setSequences] = useState(SAMPLE)
+  const [upload, setUpload] = useState(null)
   const [k, setK] = useState(21)
   const [canonical, setCanonical] = useState(true)
   const [result, setResult] = useState(null)
@@ -21,12 +31,18 @@ export default function Kmer() {
     setLoading(true)
     setError(null)
     try {
-      const seqs = sequences
-        .split('\n')
-        .map((s) => s.trim().toUpperCase())
-        .filter((s) => s.length > 0)
-      if (!seqs.length) throw new Error('Introduce al menos una secuencia')
-      const res = await api.countKmers({ sequences: seqs, k, canonical, min_abundance: 1, top: 25 })
+      let payload
+      if (upload) {
+        payload = { upload_id: upload.uploadId, k, canonical, min_abundance: 1, top: 25 }
+      } else {
+        const seqs = sequences
+          .split('\n')
+          .map((s) => s.trim().toUpperCase())
+          .filter((s) => s.length > 0)
+        if (!seqs.length) throw new Error('Introduce al menos una secuencia')
+        payload = { sequences: seqs, k, canonical, min_abundance: 1, top: 25 }
+      }
+      const res = await api.countKmers(payload)
       setResult(res)
     } catch (e) {
       setError(e.message)
@@ -49,17 +65,40 @@ export default function Kmer() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
           <FastaPanel
-            onLoaded={(records) => setSequences(records.map((r) => r.sequence).join('\n'))}
+            onLoaded={(info) => {
+              if (info.mode === 'inline') {
+                setUpload(null)
+                setSequences(info.records.map((r) => r.sequence).join('\n'))
+              } else {
+                setUpload(info)
+                setResult(null)
+              }
+            }}
           />
 
           <Card title="Parámetros">
-            <label className="label">Secuencias</label>
-            <textarea
-              className="input h-40 font-mono"
-              value={sequences}
-              onChange={(e) => setSequences(e.target.value)}
-              spellCheck={false}
-            />
+            {upload ? (
+              <>
+                <dl>
+                  <FileRow label="Archivo" value={upload.source} />
+                  <FileRow label="Registros" value={upload.recordCount} />
+                  <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+                </dl>
+                <button className="btn-ghost mt-3 w-full" onClick={() => setUpload(null)}>
+                  Usar texto manual
+                </button>
+              </>
+            ) : (
+              <>
+                <label className="label">Secuencias</label>
+                <textarea
+                  className="input h-40 font-mono"
+                  value={sequences}
+                  onChange={(e) => setSequences(e.target.value)}
+                  spellCheck={false}
+                />
+              </>
+            )}
 
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>

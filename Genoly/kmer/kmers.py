@@ -94,7 +94,8 @@ class KmerCounter:
     def count(self, sequences: List[str], k: int,
               canonical: bool = True,
               min_abundance: int = 1,
-              chunk_size: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+              chunk_size: Optional[int] = None,
+              window_size: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Cuenta la frecuencia de cada k-mer en las secuencias.
 
@@ -105,11 +106,27 @@ class KmerCounter:
                       como una sola entidad (usa el código mínimo).
             min_abundance: Frecuencia mínima para incluir un k-mer.
             chunk_size: Procesar en lotes de este tamaño para limitar memoria.
+            window_size: Máximo de bases por ventana. Las secuencias más
+                         largas se parten en ventanas con solape de k-1
+                         bases para limitar el consumo de VRAM/RAM al
+                         procesar genomas completos.
 
         Returns:
             Tuple (valores únicos, conteos) ordenados por frecuencia
             descendente (tensores CPU).
         """
+        if not sequences:
+            return torch.tensor([], dtype=torch.long), torch.tensor([], dtype=torch.long)
+
+        if window_size is not None:
+            expanded = []
+            for seq in sequences:
+                expanded.extend(self.split_sequence_windows(seq, k, window_size))
+            sequences = expanded
+
+        # Las secuencias más cortas que k no aportan ningún k-mer y romperían
+        # la convolución (kernel > entrada)
+        sequences = [s for s in sequences if len(s) >= k]
         if not sequences:
             return torch.tensor([], dtype=torch.long), torch.tensor([], dtype=torch.long)
 
@@ -170,9 +187,53 @@ class KmerCounter:
         bases = {0: 'A', 1: 'C', 2: 'G', 3: 'T'}
         return ''.join(bases[d] for d in reversed(digits))
 
+    @staticmethod
+    def split_sequence_windows(sequence: str, k: int,
+                               window_size: int) -> List[str]:
+        """
+        Divide una secuencia en ventanas con solape de k-1 bases.
+
+        El solape garantiza que ningún k-mer de la secuencia original quede
+        partido entre dos ventanas, por lo que los conteos agregados son
+        idénticos a procesar la secuencia completa.
+        """
+        if window_size <= 0:
+            raise ValueError("window_size debe ser >= 1")
+        length = len(sequence)
+        if length <= window_size:
+            return [sequence]
+        step = max(1, window_size - k + 1)
+        windows = []
+        pos = 0
+        while pos < length:
+            windows.append(sequence[pos:pos + window_size])
+            pos += step
+        return windows
+
+    @staticmethod
+    def spectrum_from_counts(counts: torch.Tensor) -> Dict[int, int]:
+        """Espectro (multiplicidad -> nº de k-mers) a partir de conteos agregados."""
+        if counts.numel() == 0:
+            return {}
+        multiplicities, freq = torch.unique(counts, return_counts=True)
+        return {int(m): int(f) for m, f in zip(multiplicities.tolist(), freq.tolist())}
+
+    @staticmethod
+    def estimate_from_counts(counts: torch.Tensor) -> Tuple[float, float]:
+        """Tamaño de genoma y cobertura a partir de conteos agregados (Lander-Waterman)."""
+        if counts.numel() == 0:
+            return 0.0, 0.0
+        total_kmers = int(counts.sum().item())
+        multiplicities, freq = torch.unique(counts, return_counts=True)
+        peak_index = int(freq.argmax().item())
+        coverage = float(multiplicities[peak_index].item())
+        genome_size = total_kmers / coverage if coverage > 0 else 0.0
+        return genome_size, coverage
+
     def spectrum(self, sequences: List[str], k: int,
                  min_abundance: int = 1,
-                 chunk_size: Optional[int] = None) -> Dict[int, int]:
+                 chunk_size: Optional[int] = None,
+                 window_size: Optional[int] = None) -> Dict[int, int]:
         """
         Espectro de k-mers: distribución del número de k-mers por multiplicidad.
 
@@ -181,21 +242,20 @@ class KmerCounter:
             k: Longitud del k-mer.
             min_abundance: Frecuencia mínima para incluir un k-mer.
             chunk_size: Procesar en lotes para limitar memoria.
+            window_size: Máximo de bases por ventana (genomas completos).
 
         Returns:
             Diccionario multiplicidad -> número de k-mers con esa multiplicidad.
         """
         _, counts = self.count(sequences, k, canonical=True,
-                               min_abundance=min_abundance, chunk_size=chunk_size)
-        if counts.numel() == 0:
-            return {}
-
-        multiplicities, freq = torch.unique(counts, return_counts=True)
-        return {int(m): int(f) for m, f in zip(multiplicities.tolist(), freq.tolist())}
+                               min_abundance=min_abundance,
+                               chunk_size=chunk_size, window_size=window_size)
+        return self.spectrum_from_counts(counts)
 
     def estimate_genome_size(self, sequences: List[str], k: int,
                              min_abundance: int = 2,
-                             chunk_size: Optional[int] = None) -> Tuple[float, float]:
+                             chunk_size: Optional[int] = None,
+                             window_size: Optional[int] = None) -> Tuple[float, float]:
         """
         Estima el tamaño del genoma a partir del espectro k-mer.
 
@@ -208,21 +268,12 @@ class KmerCounter:
             k: Longitud del k-mer.
             min_abundance: Abundancia mínima para descartar k-mers con errores.
             chunk_size: Procesar en lotes para limitar memoria.
+            window_size: Máximo de bases por ventana (genomas completos).
 
         Returns:
             Tuple (tamaño estimado del genoma, cobertura media estimada).
         """
-        values, counts = self.count(sequences, k, canonical=True,
-                                    min_abundance=min_abundance, chunk_size=chunk_size)
-        if counts.numel() == 0:
-            return 0.0, 0.0
-
-        total_kmers = int(counts.sum().item())
-
-        # Cobertura = multiplicidad pico del espectro
-        multiplicities, freq = torch.unique(counts, return_counts=True)
-        peak_index = int(freq.argmax().item())
-        coverage = float(multiplicities[peak_index].item())
-
-        genome_size = total_kmers / coverage if coverage > 0 else 0.0
-        return genome_size, coverage
+        _, counts = self.count(sequences, k, canonical=True,
+                               min_abundance=min_abundance,
+                               chunk_size=chunk_size, window_size=window_size)
+        return self.estimate_from_counts(counts)

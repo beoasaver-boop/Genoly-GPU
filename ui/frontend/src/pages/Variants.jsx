@@ -24,6 +24,7 @@ export default function Variants() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [bigFile, setBigFile] = useState(false)
 
   const run = async () => {
     setLoading(true)
@@ -66,8 +67,24 @@ export default function Variants() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
           <FastaPanel
-            onLoaded={(records) => setReference(records[0].sequence)}
+            disableUpload
+            onLoaded={(info) => {
+              if (info.mode === 'inline') {
+                setBigFile(false)
+                setReference(info.records[0].sequence)
+              } else {
+                setBigFile(true)
+              }
+            }}
           />
+
+          {bigFile && (
+            <div className="rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+              El archivo cargado es demasiado grande para el análisis de variantes; esta vista
+              trabaja con referencia y lecturas pequeñas. Para genomas completos usa Control de
+              calidad o K-mers.
+            </div>
+          )}
 
           <Card title="Entrada">
             <label className="label">Referencia</label>
