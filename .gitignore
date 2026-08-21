@@ -47,9 +47,8 @@ ENV/
 env.bak/
 venv.bak/
 
-# Excepción: contexto de transferencia para IA (sí debe viajar con el repo)
-!.env/
-!.env/contexto.md
+# Contexto local de transferencia para IA (no viaja con el repo)
+context/
 
 # IDE
 .vscode/
