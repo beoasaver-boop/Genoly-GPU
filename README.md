@@ -11,6 +11,7 @@ Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O 
 - Control de calidad: contenido GC, composición de bases y distribución de calidad Phred, con trimming y filtrado de lecturas.
 - Conteo de k-mers y espectro k-mer acelerado por GPU (convolución 1D vectorizada), con estimación de tamaño de genoma (Lander-Waterman).
 - Pileup y llamada de variantes (SNV y deleciones) sobre GPU mediante operaciones de dispersión.
+- Genética cuantitativa sobre GPU: modelos lineales mixtos (LMM) con estimación REML/ML, matriz de parentesco genómica (VanRaden) y predicción de valores de cría (BLUP).
 - Detección automática de la GPU NVIDIA con nvidia-smi e instalación automática de la build de PyTorch con CUDA más conveniente.
 - Alineamiento con el algoritmo Smith-Waterman implementado sobre PyTorch.
 - Análisis completo de mutaciones contra una referencia y comparación con variantes conocidas.
@@ -43,6 +44,8 @@ Genoly-GPU/
 │   │   └── kmers.py              # Conteo de k-mers y espectro en GPU
 │   ├── variants/
 │   │   └── caller.py             # Pileup y llamada de variantes en GPU
+│   ├── quantitative/
+│   │   └── lmm.py                # Modelos lineales mixtos (REML/ML) y BLUP
 │   └── alignment/
 │       ├── alignment.py          # Clase principal GPUSequenceAligner
 │       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
@@ -276,6 +279,8 @@ from Genoly import (
     KmerCounter,
     VariantCaller,
     Read,
+    LinearMixedModel,
+    build_kinship,
 )
 from Genoly.alignment.alignment import GPUSequenceAligner
 
@@ -307,6 +312,13 @@ variants = vc.call_variants("ACGTACGTACGTACGT", reads, min_depth=5)
 aligner = GPUSequenceAligner()
 result = aligner.align_pair("ACGTACGT", "ACGTTCGT")
 print(result.cigar_string)
+
+# 7. Genética cuantitativa: LMM + BLUP
+grm = build_kinship(genotipos)      # genotipos: matriz (individuos x marcadores), dosis {0,1,2}
+lmm = LinearMixedModel()            # auto-detecta CUDA
+resultado = lmm.fit(fenotipos, efectos_fijos, grm)   # REML por defecto
+print(resultado.heritability)
+valores_cria = lmm.blup()
 ```
 
 ## Ejemplos
@@ -445,6 +457,38 @@ aligner = GPUSequenceAligner(
 > [!IMPORTANT]
 > Para secuencias de gran tamaño el procesamiento por lotes (`align_batch`) aún procesa en serie cuando el número de pares es reducido. La verdadera paralelización por lotes en GPU es un trabajo en curso.
 
+### LinearMixedModel
+
+Modelos lineales mixtos univariantes para genética cuantitativa sobre GPU. Ajusta el modelo animal `y = Xβ + Zu + ε` con u ~ N(0, σg²K), estima las componentes de varianza por REML o ML (puntuación de Fisher con búsqueda de línea) y predice los efectos aleatorios con BLUP.
+
+| Método | Descripción |
+|---|---|
+| `fit(y, X, K, Z=None, method)` | Ajusta el modelo; devuelve `LMMResult` con varianzas genética/residual, heredabilidad, log-verosimilitud e iteraciones. |
+| `blue()` | Estimadores BLUE de los efectos fijos (β). |
+| `blup()` | Valores de cría predichos BLUP de los efectos aleatorios (u). |
+| `predict()` | Valores ajustados del modelo (Xβ + Zu). |
+
+La función `build_kinship(genotypes)` construye la matriz de relación genómica (GRM) por el método de VanRaden a partir de dosis alélicas {0, 1, 2}, imputando los valores perdidos con la media del marcador:
+
+```python
+from Genoly import LinearMixedModel, build_kinship
+
+grm = build_kinship(genotipos)             # (individuos x marcadores)
+modelo = LinearMixedModel()                # auto-detecta CUDA
+resultado = modelo.fit(fenotipos, X, grm)  # method="reml" por defecto
+print(resultado.genetic_variance, resultado.heritability)
+valores_cria = modelo.blup()
+```
+
+> [!IMPORTANT]
+> El ajuste interno se realiza en doble precisión (float64) para garantizar la estabilidad numérica de la optimización, aunque el resto del paquete trabaje en float32. En GPUs de consumo esto es más lento, pero el coste es asumible: las operaciones son O(n³) sobre matrices de tamaño n = número de individuos.
+
+> [!TIP]
+> Con `Z=None` se usa el modelo animal estándar (Z igual a la identidad). Puedes pasar tu propia matriz Z (n x q) para modelar efectos aleatorios arbitrarios: efectos de grupo, medidas repetidas, etc.
+
+> [!CAUTION]
+> La matriz K debe ser simétrica y el diseño X debe tener menos columnas que observaciones; en caso contrario `fit()` lanza `ValueError`. Los métodos `blue()`, `blup()` y `predict()` requieren haber llamado antes a `fit()`.
+
 ## Descarga de secuencias
 
 `fetchingfasta.py` descarga una secuencia FASTA desde NCBI usando el número de acceso:
@@ -469,6 +513,7 @@ python clean_fetching.py
 - [x] Análisis de calidad (scores Phred), trimming y filtrado.
 - [x] Conteo de k-mers y espectro k-mer en GPU.
 - [x] Llamada de variantes (SNV/deleciones) en GPU.
+- [x] Genética cuantitativa: modelos lineales mixtos (REML/ML) y BLUP sobre GPU.
 - [x] Auto-detección de la GPU e instalación automática de PyTorch CUDA.
 - [x] Despliegue en contenedor Docker (API + frontend, CUDA opcional).
 - [ ] Soporte real de paralelización por lotes en GPU para el alineador.

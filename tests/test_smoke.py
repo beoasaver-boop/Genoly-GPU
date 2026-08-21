@@ -28,6 +28,8 @@ from Genoly import (
     KmerCounter,
     VariantCaller,
     Read,
+    LinearMixedModel,
+    build_kinship,
 )
 from Genoly.core.gpu_setup import GpuSetup, recommend_cuda_tag
 
@@ -203,6 +205,65 @@ class TestVariantCaller(unittest.TestCase):
         self.assertEqual(snvs[0].position, 11)  # 1-based
         self.assertEqual(snvs[0].ref, 'G')
         self.assertEqual(snvs[0].alt, 'T')
+
+
+class TestQuantitativeLMM(unittest.TestCase):
+    def _simulate(self, n=200, m=400, true_g=0.6, true_e=0.4, seed=42):
+        torch.manual_seed(seed)
+        genotypes = torch.randint(0, 3, (n, m)).float()
+        K = build_kinship(genotypes)
+        A = torch.linalg.cholesky(K + 1e-6 * torch.eye(n))
+        u = (A @ torch.randn(n, dtype=torch.float64)) * true_g ** 0.5
+        y = (u + torch.randn(n, dtype=torch.float64) * true_e ** 0.5).float()
+        return y, u, K
+
+    def test_kinship_symmetry(self):
+        torch.manual_seed(0)
+        grm = build_kinship(torch.randint(0, 3, (20, 60)).float())
+        self.assertEqual(grm.shape, (20, 20))
+        self.assertTrue(torch.allclose(grm, grm.T, atol=1e-8))
+
+    def test_kinship_identical_individuals(self):
+        gt = torch.tensor([[0., 2., 1., 2.],
+                           [0., 2., 1., 2.],
+                           [2., 0., 2., 0.]])
+        grm = build_kinship(gt)
+        self.assertAlmostEqual(grm[0, 1].item(), grm[0, 0].item(), places=6)
+
+    def test_kinship_monomorphic_raises(self):
+        with self.assertRaises(ValueError):
+            build_kinship(torch.zeros(10, 5))
+
+    def test_fit_recovers_heritability_and_blup(self):
+        y, u_true, K = self._simulate()
+        model = LinearMixedModel('cpu')
+        res = model.fit(y, torch.ones(y.shape[0], 1), K, max_iter=300)
+        self.assertTrue(res.converged)
+        self.assertLess(abs(res.heritability - 0.6), 0.15)
+        corr = torch.corrcoef(torch.stack([u_true, model.blup()]))[0, 1].item()
+        self.assertGreater(corr, 0.5)
+
+    def test_blue_intercept_equals_mean(self):
+        torch.manual_seed(7)
+        y = 3.0 + torch.randn(150)
+        model = LinearMixedModel('cpu')
+        model.fit(y, torch.ones(150, 1), torch.eye(150))
+        self.assertAlmostEqual(model.blue().item(), 3.0, delta=0.15)
+
+    def test_predict_shape(self):
+        y, _, K = self._simulate(n=80, m=100, seed=3)
+        model = LinearMixedModel('cpu')
+        model.fit(y, torch.ones(80, 1), K)
+        self.assertEqual(tuple(model.predict().shape), (80,))
+
+    def test_invalid_method_raises(self):
+        with self.assertRaises(ValueError):
+            LinearMixedModel('cpu').fit(
+                torch.randn(50), torch.ones(50, 1), torch.eye(50), method="noexiste")
+
+    def test_unfitted_access_raises(self):
+        with self.assertRaises(RuntimeError):
+            LinearMixedModel('cpu').blup()
 
 
 if __name__ == "__main__":

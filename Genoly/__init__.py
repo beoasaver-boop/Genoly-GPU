@@ -13,6 +13,7 @@ from Genoly.encoding.encoder import SequenceEncoder, encode_to_tensor
 from Genoly.qc.quality import QualityAnalyzer, QualityReport
 from Genoly.kmer.kmers import KmerCounter
 from Genoly.variants.caller import VariantCaller, Variant, Read
+from Genoly.quantitative.lmm import LinearMixedModel, LMMResult, build_kinship
 
 __all__ = [
     '__version__',
@@ -38,4 +39,7 @@ __all__ = [
     'VariantCaller',
     'Variant',
     'Read',
+    'LinearMixedModel',
+    'LMMResult',
+    'build_kinship',
 ]
