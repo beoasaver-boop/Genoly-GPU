@@ -6,6 +6,7 @@ import Qc from './pages/Qc.jsx'
 import Kmer from './pages/Kmer.jsx'
 import Variants from './pages/Variants.jsx'
 import Quantitative from './pages/Quantitative.jsx'
+import Gblup from './pages/Gblup.jsx'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/kmer" element={<Kmer />} />
         <Route path="/variants" element={<Variants />} />
         <Route path="/quantitative" element={<Quantitative />} />
+        <Route path="/gblup" element={<Gblup />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

@@ -42,4 +42,7 @@ export const api = {
 
   fitLmm: (payload) =>
     request('/quantitative/fit', { method: 'POST', body: JSON.stringify(payload) }),
+
+  predictGblup: (payload) =>
+    request('/gblup/predict', { method: 'POST', body: JSON.stringify(payload) }),
 }

@@ -1,84 +1,14 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, Bar, PageHeader } from '../components/ui.jsx'
+import { makeSampleData, parseQuantData } from '../quantgen.js'
 
-const N_SAMPLE = 80
-const M_SAMPLE = 40
-
-function mulberry32(seed) {
-  let a = seed
-  return () => {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-function gaussian(rand) {
-  const u = Math.max(rand(), 1e-9)
-  const v = Math.max(rand(), 1e-9)
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
-}
-
-const SAMPLE = (() => {
-  const rand = mulberry32(20260821)
-  const lines = []
-  for (let i = 0; i < N_SAMPLE; i++) {
-    const doses = []
-    let genetic = 0
-    for (let j = 0; j < M_SAMPLE; j++) {
-      const d = Math.floor(rand() * 3)
-      genetic += (d - 1) * gaussian(rand) * 0.12
-      doses.push(d)
-    }
-    const pheno = genetic + gaussian(rand)
-    lines.push(`${pheno.toFixed(3)},${doses.join(',')}`)
-  }
-  return lines.join('\n')
-})()
-
-function parseData(text) {
-  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
-  if (!lines.length) throw new Error('Introduce al menos un individuo')
-  let width = null
-  const phenotypes = []
-  const genotypes = []
-  lines.forEach((line, idx) => {
-    const cells = line.split(',').map((c) => c.trim())
-    if (width === null) width = cells.length
-    if (cells.length !== width) {
-      throw new Error(
-        `La línea ${idx + 1} tiene ${cells.length} columnas (se esperaban ${width})`,
-      )
-    }
-    if (width < 3) {
-      throw new Error('Cada línea debe ser: fenotipo,dosis_1,dosis_2,...')
-    }
-    const pheno = Number(cells[0])
-    if (!Number.isFinite(pheno)) {
-      throw new Error(`Fenotipo inválido en la línea ${idx + 1}: "${cells[0]}"`)
-    }
-    const doses = cells.slice(1).map((c, j) => {
-      if (c === '' || c.toLowerCase() === 'na') return null
-      const v = Number(c)
-      if (!Number.isFinite(v)) {
-        throw new Error(
-          `Genotipo inválido en la línea ${idx + 1}, columna ${j + 2}: "${c}"`,
-        )
-      }
-      return v
-    })
-    phenotypes.push(pheno)
-    genotypes.push(doses)
-  })
-  return { phenotypes, genotypes }
-}
+const SAMPLE = makeSampleData()
 
 export default function Quantitative() {
   const [dataText, setDataText] = useState(SAMPLE)
   const [method, setMethod] = useState('reml')
+  const [kinshipMethod, setKinshipMethod] = useState('vanraden')
   const [maxIter, setMaxIter] = useState(100)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -88,8 +18,14 @@ export default function Quantitative() {
     setLoading(true)
     setError(null)
     try {
-      const { phenotypes, genotypes } = parseData(dataText)
-      const res = await api.fitLmm({ phenotypes, genotypes, method, max_iter: maxIter })
+      const { phenotypes, genotypes } = parseQuantData(dataText)
+      const res = await api.fitLmm({
+        phenotypes,
+        genotypes,
+        method,
+        kinship_method: kinshipMethod,
+        max_iter: maxIter,
+      })
       setResult(res)
     } catch (e) {
       setError(e.message)
@@ -139,6 +75,17 @@ export default function Quantitative() {
                 >
                   <option value="reml">REML</option>
                   <option value="ml">ML</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Parentesco</label>
+                <select
+                  className="input"
+                  value={kinshipMethod}
+                  onChange={(e) => setKinshipMethod(e.target.value)}
+                >
+                  <option value="vanraden">VanRaden</option>
+                  <option value="gcta">GCTA</option>
                 </select>
               </div>
               <div>
@@ -228,7 +175,7 @@ export default function Quantitative() {
             <Card title="Ayuda">
               <p className="text-sm text-ink-faint">
                 El módulo ajusta el modelo animal y = Xβ + Zu + ε, donde u son los valores
-                de cría con matriz de parentesco genómica K (VanRaden). Las componentes de
+                de cría con matriz de parentesco genómica K (VanRaden o GCTA). Las componentes de
                 varianza se estiman por máxima verosimilitud restringida (REML) o máxima
                 verosimilitud (ML) mediante puntuación de Fisher sobre GPU.
               </p>

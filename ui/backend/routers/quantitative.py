@@ -14,6 +14,7 @@ class QuantitativeRequest(BaseModel):
     genotypes: List[List[Optional[float]]]
     method: str = "reml"
     max_iter: int = 100
+    kinship_method: str = "vanraden"
 
 
 class QuantitativeResponse(BaseModel):
@@ -43,6 +44,11 @@ def fit_lmm(req: QuantitativeRequest) -> QuantitativeResponse:
             status_code=400,
             detail="Se necesitan al menos 5 individuos para ajustar el modelo",
         )
+    if req.kinship_method not in ("vanraden", "gcta"):
+        raise HTTPException(
+            status_code=400,
+            detail="kinship_method debe ser 'vanraden' o 'gcta'",
+        )
 
     genotypes = [
         [float("nan") if v is None else float(v) for v in row]
@@ -50,7 +56,7 @@ def fit_lmm(req: QuantitativeRequest) -> QuantitativeResponse:
     ]
     n_markers = len(genotypes[0])
 
-    kinship = build_kinship(genotypes)
+    kinship = build_kinship(genotypes, method=req.kinship_method)
     model = LinearMixedModel()
     result = model.fit(
         req.phenotypes,
