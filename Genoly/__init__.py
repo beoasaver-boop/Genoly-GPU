@@ -14,6 +14,8 @@ from Genoly.qc.quality import QualityAnalyzer, QualityReport
 from Genoly.kmer.kmers import KmerCounter
 from Genoly.variants.caller import VariantCaller, Variant, Read
 from Genoly.quantitative.lmm import LinearMixedModel, LMMResult, build_kinship
+from Genoly.quantitative.gblup import GenomicBLUP, GBLUPResult
+from Genoly.quantitative.reml import VarianceComponents, estimate_variance_components
 
 __all__ = [
     '__version__',
@@ -42,4 +44,8 @@ __all__ = [
     'LinearMixedModel',
     'LMMResult',
     'build_kinship',
+    'GenomicBLUP',
+    'GBLUPResult',
+    'VarianceComponents',
+    'estimate_variance_components',
 ]

@@ -29,6 +29,7 @@ from Genoly import (
     VariantCaller,
     Read,
     LinearMixedModel,
+    GenomicBLUP,
     build_kinship,
 )
 from Genoly.core.gpu_setup import GpuSetup, recommend_cuda_tag
@@ -234,6 +235,21 @@ class TestQuantitativeLMM(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_kinship(torch.zeros(10, 5))
 
+    def test_kinship_gcta_symmetry_and_identical(self):
+        torch.manual_seed(0)
+        gt = torch.randint(0, 3, (20, 60)).float()
+        grm = build_kinship(gt, method="gcta")
+        self.assertEqual(grm.shape, (20, 20))
+        self.assertTrue(torch.allclose(grm, grm.T, atol=1e-8))
+        dup = torch.cat([gt[:1], gt[:1], gt[2:]], dim=0)
+        grm_dup = build_kinship(dup, method="gcta")
+        self.assertAlmostEqual(
+            grm_dup[0, 1].item(), grm_dup[0, 0].item(), places=6)
+
+    def test_kinship_invalid_method_raises(self):
+        with self.assertRaises(ValueError):
+            build_kinship(torch.randint(0, 3, (5, 10)).float(), method="noexiste")
+
     def test_fit_recovers_heritability_and_blup(self):
         y, u_true, K = self._simulate()
         model = LinearMixedModel('cpu')
@@ -264,6 +280,56 @@ class TestQuantitativeLMM(unittest.TestCase):
     def test_unfitted_access_raises(self):
         with self.assertRaises(RuntimeError):
             LinearMixedModel('cpu').blup()
+
+
+class TestGBLUP(unittest.TestCase):
+    def _simulate(self, n=150, m=300, true_g=0.6, true_e=0.4, seed=11):
+        torch.manual_seed(seed)
+        genotypes = torch.randint(0, 3, (n, m)).float()
+        K = build_kinship(genotypes)
+        A = torch.linalg.cholesky(K + 1e-6 * torch.eye(n, dtype=torch.float64))
+        u = (A @ torch.randn(n, dtype=torch.float64)) * true_g ** 0.5
+        y = (u + torch.randn(n, dtype=torch.float64) * true_e ** 0.5).float()
+        return y, u, K
+
+    def test_known_variances_reliabilities_and_accuracy(self):
+        y, u_true, K = self._simulate()
+        model = GenomicBLUP('cpu')
+        res = model.fit(y, torch.ones(y.shape[0], 1), K,
+                        genetic_variance=0.6, residual_variance=0.4)
+        self.assertEqual(res.variance_source, 'dadas')
+        self.assertIsNone(res.log_likelihood)
+        rel = model.reliabilities()
+        self.assertTrue(bool(((rel >= 0) & (rel <= 1)).all()))
+        acc = model.accuracies()
+        self.assertTrue(torch.allclose(acc, rel.sqrt()))
+        corr = torch.corrcoef(torch.stack([u_true, model.blup()]))[0, 1].item()
+        self.assertGreater(corr, 0.5)
+
+    def test_estimates_variances_when_missing(self):
+        y, _, K = self._simulate(n=200, m=400, seed=12)
+        model = GenomicBLUP('cpu')
+        res = model.fit(y, torch.ones(y.shape[0], 1), K)
+        self.assertEqual(res.variance_source, 'reml')
+        self.assertIsNotNone(res.log_likelihood)
+        h2 = res.genetic_variance / (res.genetic_variance + res.residual_variance)
+        self.assertLess(abs(h2 - 0.6), 0.15)
+
+    def test_single_variance_raises(self):
+        y, _, K = self._simulate(n=40, m=50, seed=5)
+        with self.assertRaises(ValueError):
+            GenomicBLUP('cpu').fit(y, torch.ones(40, 1), K,
+                                   genetic_variance=0.5)
+
+    def test_predict_shape(self):
+        y, _, K = self._simulate(n=40, m=50, seed=6)
+        model = GenomicBLUP('cpu')
+        model.fit(y, torch.ones(40, 1), K)
+        self.assertEqual(tuple(model.predict().shape), (40,))
+
+    def test_unfitted_access_raises(self):
+        with self.assertRaises(RuntimeError):
+            GenomicBLUP('cpu').blup()
 
 
 if __name__ == "__main__":
