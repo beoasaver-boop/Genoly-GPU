@@ -47,7 +47,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# Contexto local de transferencia para IA (no viaja con el repo)
+# Contexto proyecto
 context/
 
 # IDE
