@@ -31,6 +31,7 @@ from Genoly import (
     LinearMixedModel,
     GenomicBLUP,
     build_kinship,
+    prepare_quantitative_data,
 )
 from Genoly.core.gpu_setup import GpuSetup, recommend_cuda_tag
 
@@ -330,6 +331,97 @@ class TestGBLUP(unittest.TestCase):
     def test_unfitted_access_raises(self):
         with self.assertRaises(RuntimeError):
             GenomicBLUP('cpu').blup()
+
+
+class TestPreprocess(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = os.path.join(os.path.dirname(__file__), '_tmp_prep')
+        os.makedirs(self.tmpdir, exist_ok=True)
+
+    def tearDown(self):
+        for name in os.listdir(self.tmpdir):
+            os.remove(os.path.join(self.tmpdir, name))
+        os.rmdir(self.tmpdir)
+
+    def _write(self, name, content):
+        path = os.path.join(self.tmpdir, name)
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(content)
+        return path
+
+    def test_csv_header_drops_column_and_imputes_mean(self):
+        path = self._write(
+            'datos.csv',
+            "feno,m1,m2,sexo\n"
+            "1.0,0,2,M\n"
+            "2.0,1,,F\n"
+            "0.5,2,1,M\n"
+            "1.5,,0,F\n"
+            "2.5,1,2,\n"
+            "0.8,0,1,F\n",
+        )
+        pheno, geno, rep = prepare_quantitative_data(path)
+        self.assertTrue(rep.header_detected)
+        self.assertEqual(rep.dropped_columns, ['sexo'])
+        self.assertEqual(rep.imputed_cells, 2)
+        self.assertEqual(rep.final_rows, 6)
+        self.assertEqual(rep.final_markers, 2)
+        self.assertEqual(len(pheno), 6)
+        self.assertAlmostEqual(geno[1][1], 1.2)
+        self.assertAlmostEqual(geno[3][0], 0.8)
+
+    def test_mode_imputation(self):
+        path = self._write(
+            'moda.csv',
+            "feno,m1,m2\n"
+            "1.0,,2\n"
+            "2.0,1,0\n"
+            "0.5,0,2\n"
+            "1.5,1,1\n"
+            "2.5,0,2\n"
+            "0.8,1,0\n",
+        )
+        pheno, geno, rep = prepare_quantitative_data(path, impute_method='moda')
+        self.assertEqual(rep.imputed_cells, 1)
+        self.assertEqual(geno[0][0], 1)
+
+    def test_semicolon_delimiter_and_decimal_comma(self):
+        path = self._write(
+            'es.csv',
+            "feno;m1;m2\n"
+            "2,5;0;2\n"
+            "1,0;1;1\n"
+            "0,5;2;0\n"
+            "1,5;1;2\n"
+            "2,5;0;1\n",
+        )
+        pheno, geno, _ = prepare_quantitative_data(path)
+        self.assertAlmostEqual(pheno[0], 2.5)
+        self.assertAlmostEqual(pheno[-1], 2.5)
+
+    def test_excel_file(self):
+        openpyxl = __import__('openpyxl')
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        rows = [
+            ['feno', 'm1', 'm2'],
+            [1.0, 0, 2], [2.0, 1, 0], [0.5, 2, 1],
+            [1.5, '', 0], [2.5, 1, 2], [0.8, 0, 1],
+        ]
+        for row in rows:
+            ws.append(row)
+        path = os.path.join(self.tmpdir, 'datos.xlsx')
+        wb.save(path)
+
+        pheno, geno, rep = prepare_quantitative_data(path)
+        self.assertEqual(rep.final_rows, 6)
+        self.assertEqual(rep.final_markers, 2)
+        self.assertAlmostEqual(geno[3][0], (0 + 1 + 2 + 1 + 0) / 5)
+
+    def test_too_few_individuals_raises(self):
+        path = self._write('corto.csv', "feno,m1\n1.0,0\n2.0,1\n0.5,2\n")
+        with self.assertRaises(ValueError):
+            prepare_quantitative_data(path)
 
 
 if __name__ == "__main__":

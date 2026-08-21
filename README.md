@@ -11,7 +11,9 @@ Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O 
 - Control de calidad: contenido GC, composición de bases y distribución de calidad Phred, con trimming y filtrado de lecturas.
 - Conteo de k-mers y espectro k-mer acelerado por GPU (convolución 1D vectorizada), con estimación de tamaño de genoma (Lander-Waterman).
 - Pileup y llamada de variantes (SNV y deleciones) sobre GPU mediante operaciones de dispersión.
-- Genética cuantitativa sobre GPU: modelos lineales mixtos (LMM) con estimación REML/ML, matriz de parentesco genómica (VanRaden) y predicción de valores de cría (BLUP).
+- Genética cuantitativa sobre GPU: modelos lineales mixtos (LMM) con estimación REML/ML, matriz de parentesco genómica (VanRaden o GCTA) y predicción de valores de cría (BLUP).
+- Predicción genómica GBLUP en un paso con varianzas conocidas o estimadas por REML, incluyendo fiabilidad y precisión por individuo (PEV).
+- Carga de tablas CSV o Excel con preprocesamiento: detección de cabecera y delimitador, conversión de decimales con coma, limpieza de columnas/filas no válidas e imputación de dosis perdidas por media o moda.
 - Detección automática de la GPU NVIDIA con nvidia-smi e instalación automática de la build de PyTorch con CUDA más conveniente.
 - Alineamiento con el algoritmo Smith-Waterman implementado sobre PyTorch.
 - Análisis completo de mutaciones contra una referencia y comparación con variantes conocidas.
@@ -45,7 +47,12 @@ Genoly-GPU/
 │   ├── variants/
 │   │   └── caller.py             # Pileup y llamada de variantes en GPU
 │   ├── quantitative/
-│   │   └── lmm.py                # Modelos lineales mixtos (REML/ML) y BLUP
+│   │   ├── lmm.py                # LinearMixedModel: fachada LMM (REML/ML + BLUP)
+│   │   ├── grm.py                # Matriz de parentesco genómica (VanRaden, GCTA)
+│   │   ├── reml.py               # Estimación REML/ML por puntuación de Fisher
+│   │   ├── gblup.py              # GenomicBLUP con fiabilidad y precisión
+│   │   ├── preprocess.py         # Carga CSV/Excel con limpieza e imputación
+│   │   └── utils.py              # Validación de datos y Cholesky regularizada
 │   └── alignment/
 │       ├── alignment.py          # Clase principal GPUSequenceAligner
 │       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
@@ -83,6 +90,8 @@ Genoly-GPU incluye una interfaz web moderna construida con **React + Vite + Tail
 | `/qc` | Control de calidad: GC content, composición y calidad Phred. |
 | `/kmer` | Conteo de k-mers, espectro y estimación de tamaño de genoma. |
 | `/variants` | Pileup y llamada de variantes (SNV/deleciones). |
+| `/quantitative` | Genética cuantitativa: LMM (REML/ML) y valores de cría BLUP. |
+| `/gblup` | Predicción genómica GBLUP con fiabilidad y precisión por individuo. |
 
 ### Puesta en marcha
 
@@ -117,6 +126,10 @@ npm run build      # genera ui/frontend/dist
 |---|---|
 | torch | >= 2.0.0 |
 | numpy | >= 1.20.0 |
+| openpyxl | >= 3.1 |
+
+> [!NOTE]
+> `openpyxl` solo se necesita para leer archivos de Excel (`.xlsx`/`.xls`) con el módulo de preprocesamiento; los CSV funcionan sin él.
 
 Dependencias opcionales para los ejemplos:
 
@@ -468,12 +481,13 @@ Modelos lineales mixtos univariantes para genética cuantitativa sobre GPU. Ajus
 | `blup()` | Valores de cría predichos BLUP de los efectos aleatorios (u). |
 | `predict()` | Valores ajustados del modelo (Xβ + Zu). |
 
-La función `build_kinship(genotypes)` construye la matriz de relación genómica (GRM) por el método de VanRaden a partir de dosis alélicas {0, 1, 2}, imputando los valores perdidos con la media del marcador:
+La función `build_kinship(genotypes, method)` construye la matriz de relación genómica (GRM) a partir de dosis alélicas {0, 1, 2}, imputando los valores perdidos con la media del marcador. Admite dos métodos: `vanraden` (por defecto) y `gcta` (columnas estandarizadas, excluye marcadores monórficos):
 
 ```python
 from Genoly import LinearMixedModel, build_kinship
 
 grm = build_kinship(genotipos)             # (individuos x marcadores)
+grm = build_kinship(genotipos, method="gcta")
 modelo = LinearMixedModel()                # auto-detecta CUDA
 resultado = modelo.fit(fenotipos, X, grm)  # method="reml" por defecto
 print(resultado.genetic_variance, resultado.heritability)
@@ -488,6 +502,42 @@ valores_cria = modelo.blup()
 
 > [!CAUTION]
 > La matriz K debe ser simétrica y el diseño X debe tener menos columnas que observaciones; en caso contrario `fit()` lanza `ValueError`. Los métodos `blue()`, `blup()` y `predict()` requieren haber llamado antes a `fit()`.
+
+### GenomicBLUP
+
+Predicción genómica GBLUP sobre GPU. A diferencia de `LinearMixedModel`, permite fijar directamente las componentes de varianza (solución en un paso, sin iterar) y calcula la fiabilidad y la precisión de cada valor de cría a partir del error de predicción (PEV).
+
+| Método | Descripción |
+|---|---|
+| `fit(y, X, K, Z=None, genetic_variance=None, residual_variance=None)` | Predice los valores de cría; si no se indican las varianzas, las estima por REML. Devuelve `GBLUPResult`. |
+| `blup()` / `blue()` | Valores de cría genómicos (GEBV) / efectos fijos. |
+| `reliabilities()` | Fiabilidad de cada individuo: 1 − PEV/Var(u), en [0, 1]. |
+| `accuracies()` | Precisión de cada individuo (√fiabilidad). |
+| `predict()` | Valores ajustados del modelo (Xβ + Zu). |
+
+```python
+from Genoly import GenomicBLUP
+
+gblup = GenomicBLUP()
+resultado = gblup.fit(fenotipos, X, grm,
+                      genetic_variance=0.5, residual_variance=0.9)
+print(resultado.variance_source)     # "dadas" o "reml"
+print(gblup.blup(), gblup.accuracies())
+```
+
+### Preprocesamiento de CSV/Excel
+
+`prepare_quantitative_data(path)` carga una tabla de fenotipos y genotipos (`.csv`, `.tsv`, `.txt`, `.xlsx` o `.xls`) aplicando la limpieza estándar antes del análisis: detección automática de cabecera y delimitador (coma, punto y coma o tabulador), conversión de decimales con coma, descarte de columnas no numéricas y de filas sin fenotipo, e imputación de dosis perdidas por media o moda.
+
+```python
+from Genoly import prepare_quantitative_data
+
+fenotipos, genotipos, informe = prepare_quantitative_data("datos.csv", impute_method="media")
+print(informe.final_rows, informe.imputed_cells, informe.dropped_columns)
+```
+
+> [!TIP]
+> La primera columna numérica se interpreta como fenotipo y el resto como marcadores. Excel requiere `openpyxl` (incluido en requirements.txt); los CSV usan solo la librería estándar.
 
 ## Descarga de secuencias
 
@@ -514,6 +564,8 @@ python clean_fetching.py
 - [x] Conteo de k-mers y espectro k-mer en GPU.
 - [x] Llamada de variantes (SNV/deleciones) en GPU.
 - [x] Genética cuantitativa: modelos lineales mixtos (REML/ML) y BLUP sobre GPU.
+- [x] Predicción genómica GBLUP con fiabilidad y precisión por individuo.
+- [x] Carga de tablas CSV/Excel con limpieza e imputación de valores perdidos.
 - [x] Auto-detección de la GPU e instalación automática de PyTorch CUDA.
 - [x] Despliegue en contenedor Docker (API + frontend, CUDA opcional).
 - [ ] Soporte real de paralelización por lotes en GPU para el alineador.
