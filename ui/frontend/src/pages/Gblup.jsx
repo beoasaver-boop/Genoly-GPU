@@ -1,19 +1,45 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, Bar, PageHeader } from '../components/ui.jsx'
+import PreprocessReport from '../components/PreprocessReport.jsx'
 import { makeSampleData, parseQuantData } from '../quantgen.js'
+import { parseFileGrid, preprocessGrid } from '../tabular.js'
 
 const SAMPLE = makeSampleData()
 
 export default function Gblup() {
+  const fileInputRef = useRef(null)
   const [dataText, setDataText] = useState(SAMPLE)
   const [kinshipMethod, setKinshipMethod] = useState('vanraden')
   const [varGenetic, setVarGenetic] = useState('')
   const [varResidual, setVarResidual] = useState('')
+  const [imputeMethod, setImputeMethod] = useState('media')
   const [maxIter, setMaxIter] = useState(100)
+  const [report, setReport] = useState(null)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setError(null)
+    setResult(null)
+    try {
+      const grid = await parseFileGrid(file)
+      const out = preprocessGrid(grid, { imputeMethod })
+      setDataText(
+        out.phenotypes
+          .map((p, i) => [p, ...out.genotypes[i]].join(','))
+          .join('\n'),
+      )
+      setReport({ ...out.report, source: file.name })
+    } catch (err) {
+      setReport(null)
+      setError(err.message)
+    }
+  }
 
   const run = async () => {
     setLoading(true)
@@ -76,6 +102,36 @@ export default function Gblup() {
               onChange={(e) => setDataText(e.target.value)}
               spellCheck={false}
             />
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                className="btn-ghost flex-1"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Cargar CSV / Excel
+              </button>
+              <select
+                className="input !w-36"
+                value={imputeMethod}
+                onChange={(e) => setImputeMethod(e.target.value)}
+                title="Imputación de valores perdidos al cargar archivos"
+              >
+                <option value="media">Imputar media</option>
+                <option value="moda">Imputar moda</option>
+              </select>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.tsv,.txt,.xlsx,.xls"
+              className="hidden"
+              onChange={handleFile}
+            />
+            {report && (
+              <div className="mt-3">
+                <PreprocessReport report={report} />
+              </div>
+            )}
             <p className="mt-2 text-xs text-ink-faint">
               Mismo formato que en Genética cuantitativa. Las celdas vacías se imputan.
             </p>
