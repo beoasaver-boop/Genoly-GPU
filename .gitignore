@@ -49,6 +49,7 @@ venv.bak/
 
 # Contexto proyecto
 context/
+comando.txt
 
 # IDE
 .vscode/
