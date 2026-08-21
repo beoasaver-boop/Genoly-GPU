@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from Genoly import __version__
 from Genoly.core.gpu_setup import GpuSetup
 
-from ui.backend.routers import device, qc, kmer, variants, upload
+from ui.backend.routers import device, qc, kmer, variants, upload, quantitative
 
 app = FastAPI(
     title="Genoly-GPU API",
@@ -35,6 +35,7 @@ app.include_router(device.router)
 app.include_router(qc.router)
 app.include_router(kmer.router)
 app.include_router(variants.router)
+app.include_router(quantitative.router)
 app.include_router(upload.router)
 
 

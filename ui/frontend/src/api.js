@@ -8,7 +8,13 @@ async function request(path, options = {}) {
     ...options,
   })
   if (!res.ok) {
-    const detail = await res.text()
+    let detail = await res.text()
+    try {
+      const parsed = JSON.parse(detail)
+      if (parsed && typeof parsed.detail === 'string') detail = parsed.detail
+    } catch {
+      // cuerpo no JSON: se muestra tal cual
+    }
     throw new Error(detail || `Error ${res.status}`)
   }
   return res.json()
@@ -33,4 +39,7 @@ export const api = {
 
   callVariants: (payload) =>
     request('/variants/call', { method: 'POST', body: JSON.stringify(payload) }),
+
+  fitLmm: (payload) =>
+    request('/quantitative/fit', { method: 'POST', body: JSON.stringify(payload) }),
 }

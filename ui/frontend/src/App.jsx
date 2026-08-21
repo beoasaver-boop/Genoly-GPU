@@ -5,6 +5,7 @@ import Device from './pages/Device.jsx'
 import Qc from './pages/Qc.jsx'
 import Kmer from './pages/Kmer.jsx'
 import Variants from './pages/Variants.jsx'
+import Quantitative from './pages/Quantitative.jsx'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/qc" element={<Qc />} />
         <Route path="/kmer" element={<Kmer />} />
         <Route path="/variants" element={<Variants />} />
+        <Route path="/quantitative" element={<Quantitative />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
