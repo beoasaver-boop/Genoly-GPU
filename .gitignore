@@ -89,6 +89,9 @@ start_tunnel.ps1
 # Descargas NCBI / archivos temporales de secuencias
 pantera
 
+# Datos reales descargados para pruebas locales (descargar_datos_test.py)
+datos_reales/
+
 # UI (React/Vite)
 node_modules/
 ui/frontend/dist/

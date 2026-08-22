@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 
 from Genoly.core.device import DeviceManager
@@ -10,9 +9,9 @@ class KmerCounter:
     """
     Conteo de k-mers y análisis de espectro acelerado por GPU.
 
-    Codifica cada k-mer como un entero en base 4 (A=0, C=1, G=2, T=3) y
-    usa operaciones de convolución 1D sobre CUDA para extraer todos los
-    k-mers de un lote de secuencias de forma vectorizada.
+    Codifica cada k-mer como un entero en base 4 (A=0, C=1, G=2, T=3)
+    mediante aritmética entera vectorizada (Horner) en int64, exacta para
+    todo k <= 31, sobre el dispositivo detectado.
     """
 
     def __init__(self, device: Optional[str] = None):
@@ -23,13 +22,6 @@ class KmerCounter:
         self.manager = DeviceManager(device)
         self.device = self.manager.device
         self.encoder = SequenceEncoder(device)
-
-    def _kmer_powers(self, k: int) -> torch.Tensor:
-        """Kernel de potencias de 4 para la convolución (MSB primero)."""
-        return torch.tensor(
-            [4 ** (k - 1 - j) for j in range(k)],
-            dtype=torch.float32, device=self.device,
-        ).view(1, 1, k)
 
     def _encode_kmers(self, sequences: List[str],
                       k: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -51,25 +43,25 @@ class KmerCounter:
         encoded, lengths = self.encoder.encode(sequences)
 
         # Dígitos base-4 válidos (A/C/G/T); inválidos (N/ambigüedad) -> -1
-        base4 = encoded.where(
-            encoded < 4, torch.tensor(-1, device=self.device)
-        ).float()
+        base4 = encoded.where(encoded < 4, torch.tensor(-1, device=self.device))
 
-        # Convolución con las potencias de 4 -> códigos enteros de k-mer
-        x = base4.unsqueeze(1)  # (B, 1, L)
-        codes = F.conv1d(x, self._kmer_powers(k)).squeeze(1).long()
+        # Horner en int64: códigos exactos para todo k <= 31
+        n_ventanas = max(int((lengths - k + 1).max()), 0)
+        codes = torch.zeros((base4.shape[0], n_ventanas),
+                            dtype=torch.int64, device=self.device)
+        for j in range(k):
+            codes = codes * 4 + base4[:, j:j + n_ventanas]
 
         # Validez: todos los dígitos de la ventana son canónicos
-        valid_digits = (base4 >= 0).float()
-        window_count = F.conv1d(
-            valid_digits.unsqueeze(1),
-            torch.ones(1, 1, k, device=self.device),
-        ).squeeze(1)
+        valid_digits = base4 >= 0
+        window_count = torch.zeros_like(codes)
+        for j in range(k):
+            window_count += valid_digits[:, j:j + n_ventanas].to(torch.int64)
         valid = window_count == k
 
         # Ventanas que caben dentro de la longitud real de cada secuencia
         lens = (lengths - k + 1).clamp(min=0)
-        pos = torch.arange(codes.shape[1], device=self.device).unsqueeze(0)
+        pos = torch.arange(n_ventanas, device=self.device).unsqueeze(0)
         valid &= pos < lens.unsqueeze(1)
 
         return codes, valid
@@ -79,6 +71,9 @@ class KmerCounter:
         Calcula el código del reverse complement de cada k-mer.
 
         El complemento de un dígito es `3 - dígito` y el orden se invierte.
+        Los dígitos se extraen del menos al más significativo (de la última
+        base a la primera), así que recorrerlos en ese orden construye
+        directamente el código del revcomp.
         """
         digits = []
         x = codes
@@ -87,7 +82,7 @@ class KmerCounter:
             x = x // 4
 
         rc = torch.zeros_like(codes)
-        for d in reversed(digits):  # de MSB a LSB
+        for d in digits:  # última base primero -> MSB del revcomp
             rc = rc * 4 + (3 - d)
         return rc
 

@@ -43,6 +43,19 @@ class GenomicBLUP:
     previos la solución es directa, sin iterar, e incluye la fiabilidad y la
     precisión de cada valor de cría. Si no se proporcionan, se estiman por
     REML antes de resolver.
+
+    Los efectos fijos se ESTIMAN por BLUE (beta_hat) y los valores de cría
+    son u = G Z' V^-1 (y - X beta_hat). Las fiabilidades usan el PEV del BLUP
+    con efectos fijos estimados, equivalente al bloque inferior derecho de la
+    inversa de las ecuaciones del modelo mixto de Henderson:
+
+        PEV(u) = diag(G - G Z' P Z G)
+        P = V^-1 - V^-1 X (X' V^-1 X)^-1 X' V^-1,  G = sigma_g^2 K
+
+    y reliability_i = 1 - PEV(u)_i / (sigma_g^2 * k_ii), truncado a [0, 1].
+    La diferencia entre T1 y T2 del PEV se calcula fusionada dentro de P para
+    evitar la cancelación catastrófica de restar diagonales grandes por
+    separado.
     """
 
     def __init__(self, device: Optional[str] = None):

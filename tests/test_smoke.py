@@ -80,6 +80,35 @@ class TestIO(unittest.TestCase):
         self.assertEqual(loaded[0].sequence, SEQ)
         self.assertEqual(loaded[0].scores, [40] * len(SEQ))
 
+    def test_fastq_multiregistro(self):
+        records = [
+            FastqRecord(id="r1", sequence="ACGTAC", quality="IIIIII"),
+            FastqRecord(id="r2", sequence="TTTTGG", quality="AAAAAA"),
+            FastqRecord(id="r3", sequence=SEQ, quality="I" * len(SEQ)),
+        ]
+        write_fastq(self.fastq_path, records)
+        loaded = FastqReader(self.fastq_path).read_all()
+        self.assertEqual([r.id for r in loaded], ["r1", "r2", "r3"])
+        self.assertEqual([r.sequence for r in loaded], ["ACGTAC", "TTTTGG", SEQ])
+        self.assertEqual(loaded[1].quality, "AAAAAA")
+
+    def test_fastq_multilinea_illumina(self):
+        seq = "ACGTACGTAA"
+        with open(self.fastq_path, "w") as fh:
+            fh.write("@r1 desc\n")
+            fh.write(seq + "\n")
+            fh.write("+\n")
+            fh.write("IIIII\n")
+            fh.write("EEEEE\n")
+            fh.write("@r2\n")
+            fh.write("ACGT\n+\nIIII\n")
+        loaded = FastqReader(self.fastq_path).read_all()
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(loaded[0].id, "r1")
+        self.assertEqual(loaded[0].quality, "IIIIIEEEEE")
+        self.assertEqual(loaded[1].id, "r2")
+        self.assertEqual(loaded[1].sequence, "ACGT")
+
 
 class TestEncoding(unittest.TestCase):
     def test_roundtrip(self):
@@ -139,12 +168,12 @@ class TestQC(unittest.TestCase):
 class TestKmer(unittest.TestCase):
     def test_count_known(self):
         kc = KmerCounter('cpu')
-        # 4 copias de ACGTACGT -> k-mer ACGTACGT aparece 2 veces (ventanas)
-        values, counts = kc.count(["ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT"], k=8)
-        self.assertTrue(int(counts.max().item()) >= 1)
-        # El k-mer más frecuente debe ser ACGTACGT
+        values, counts = kc.count([SEQ], k=8)
         top = kc.decode_kmer(int(values[counts.argmax()].item()), 8)
-        self.assertEqual(top, "ACGTACGT")
+        # Canonico correcto: 'CGTACGTA' agrupa su revcomp 'TACGTACG'
+        # (8 + 8 ventanas) y supera a 'ACGTACGT' (9 ventanas, palindromico)
+        self.assertEqual(top, "CGTACGTA")
+        self.assertEqual(int(counts.max().item()), 16)
 
     def test_canonical(self):
         kc = KmerCounter('cpu')
@@ -152,6 +181,41 @@ class TestKmer(unittest.TestCase):
         values, counts = kc.count(["ACGTACGT"], k=8, canonical=True)
         self.assertEqual(len(values), 1)
         self.assertEqual(kc.decode_kmer(int(values[0].item()), 8), "ACGTACGT")
+
+    def test_canonico_revcomp_referencia(self):
+        kc = KmerCounter('cpu')
+        seq = "GATTACAGATTACAGGATCCTAACGT"
+        values, counts = kc.count([seq], k=5, canonical=True)
+        obtenido = {int(v): int(c) for v, c in zip(values.tolist(), counts.tolist())}
+        idx = {b: i for i, b in enumerate('ACGT')}
+        esperado = {}
+        for i in range(len(seq) - 4):
+            w = seq[i:i + 5]
+            code = 0
+            for ch in w:
+                code = code * 4 + idx[ch]
+            rc = 0
+            for ch in reversed(w):
+                rc = rc * 4 + (3 - idx[ch])
+            clave = min(code, rc)
+            esperado[clave] = esperado.get(clave, 0) + 1
+        self.assertEqual(obtenido, esperado)
+
+    def test_exactitud_k31(self):
+        kc = KmerCounter('cpu')
+        g = torch.Generator().manual_seed(1234)
+        seq = ''.join('ACGT'[i] for i in torch.randint(0, 4, (4000,), generator=g).tolist())
+        k = 31
+        values, counts = kc.count([seq], k=k, canonical=False)
+        obtenido = {int(v): int(c) for v, c in zip(values.tolist(), counts.tolist())}
+        idx = {b: i for i, b in enumerate('ACGT')}
+        esperado = {}
+        for i in range(len(seq) - k + 1):
+            code = 0
+            for ch in seq[i:i + k]:
+                code = code * 4 + idx[ch]
+            esperado[code] = esperado.get(code, 0) + 1
+        self.assertEqual(obtenido, esperado)
 
     def test_spectrum(self):
         kc = KmerCounter('cpu')
@@ -306,6 +370,42 @@ class TestGBLUP(unittest.TestCase):
         self.assertTrue(torch.allclose(acc, rel.sqrt()))
         corr = torch.corrcoef(torch.stack([u_true, model.blup()]))[0, 1].item()
         self.assertGreater(corr, 0.5)
+
+    def test_reliability_matches_mme_reference(self):
+        """La fiabilidad debe usar el PEV con efectos fijos ESTIMADOS.
+
+        Referencia canonica: bloque inferior derecho de la inversa de las
+        ecuaciones del modelo mixto de Henderson.
+        """
+        g = torch.Generator().manual_seed(99)
+        q = 30
+        W = torch.randn(q, 50, generator=g, dtype=torch.float64) / 10.0
+        K = W @ W.T + 0.2 * torch.eye(q)
+        u = torch.linalg.cholesky(K) @ torch.randn(
+            q, 1, generator=g, dtype=torch.float64)
+        X = torch.cat([torch.ones(q, 1),
+                       torch.randn(q, 1, generator=g, dtype=torch.float64)],
+                      dim=1)
+        Z = torch.eye(q, dtype=torch.float64)
+        beta = torch.tensor([[1.0], [0.7]], dtype=torch.float64)
+        y = (X @ beta + Z @ u + 0.8 * torch.randn(
+            q, 1, generator=g, dtype=torch.float64)).reshape(-1)
+
+        var_g, var_e = 1.2, 0.64
+        model = GenomicBLUP('cpu')
+        res = model.fit(y, X, K, genetic_variance=var_g,
+                        residual_variance=var_e)
+
+        Rinv = torch.eye(q, dtype=torch.float64) / var_e
+        Ginv = torch.linalg.inv(var_g * K)
+        mme = torch.cat([
+            torch.cat([X.T @ Rinv @ X, X.T @ Rinv @ Z], dim=1),
+            torch.cat([Z.T @ Rinv @ X, Z.T @ Rinv @ Z + Ginv], dim=1),
+        ], dim=0)
+        Cinv = torch.linalg.inv(mme)
+        pev = torch.diagonal(Cinv[X.shape[1]:, X.shape[1]:])
+        rel_ref = (1.0 - pev / (var_g * torch.diagonal(K))).clamp(0.0, 1.0)
+        self.assertTrue(torch.allclose(res.reliabilities, rel_ref, atol=1e-8))
 
     def test_estimates_variances_when_missing(self):
         y, _, K = self._simulate(n=200, m=400, seed=12)
