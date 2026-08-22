@@ -46,8 +46,10 @@ class FastqReader:
     def records(self) -> Iterator[FastqRecord]:
         """Generador de registros FASTQ."""
         with open(self.path, "r", encoding="utf-8") as fh:
+            siguiente: Optional[str] = None
             while True:
-                header = fh.readline()
+                header = siguiente if siguiente is not None else fh.readline()
+                siguiente = None
                 if not header:
                     break
                 header = header.strip()
@@ -61,20 +63,15 @@ class FastqReader:
                 if not sequence or not quality:
                     raise ValueError(f"Lectura FASTQ incompleta: {header}")
 
-                if len(sequence) != len(quality):
+                # Formato multilínea Illumina: consumir líneas extra de calidad
+                siguiente = fh.readline()
+                while siguiente and siguiente.strip() and not siguiente.startswith("@"):
+                    quality += siguiente.strip()
+                    siguiente = fh.readline()
+                if len(quality) != len(sequence):
                     raise ValueError(
                         f"Longitud de secuencia y calidad no coinciden en {header}"
                     )
-
-                # Formato multilínea Illumina: consumir líneas extra de calidad
-                next_line = fh.readline()
-                while next_line and next_line.strip() and not next_line.startswith("@"):
-                    quality += next_line.strip()
-                    next_line = fh.readline()
-                    if len(quality) >= len(sequence):
-                        break
-                if len(quality) < len(sequence):
-                    raise ValueError(f"Calidad incompleta en lectura {header}")
 
                 record_id = header.split()[0][1:]
                 yield FastqRecord(
