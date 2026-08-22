@@ -312,7 +312,7 @@
   width: 2px;
   height: var(--len);
   background: linear-gradient(180deg, transparent, rgb(var(--line-strong) / 0.4), transparent);
-  transform-origin: top center;
+  transform-origin: bottom center;
   animation: rungFloat var(--dur) linear infinite;
   animation-delay: var(--delay);
 }
