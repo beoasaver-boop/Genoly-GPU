@@ -6,10 +6,10 @@ Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O 
 
 ## Caracteristicas
 
-- Lectura/escritura de FASTA y FASTQ en streaming (consumo de memoria reducido).
+- Lectura/escritura de FASTA y FASTQ en streaming (consumo de memoria reducido), con soporte de FASTQ multi-registro y multilínea Illumina.
 - Codificación de secuencias a tensores enteros y one-hot sobre GPU.
 - Control de calidad: contenido GC, composición de bases y distribución de calidad Phred, con trimming y filtrado de lecturas.
-- Conteo de k-mers y espectro k-mer acelerado por GPU (convolución 1D vectorizada), con estimación de tamaño de genoma (Lander-Waterman).
+- Conteo de k-mers y espectro k-mer acelerado por GPU (codificación base-4 entera en int64, exacta hasta k=31), con estimación de tamaño de genoma (Lander-Waterman).
 - Pileup y llamada de variantes (SNV y deleciones) sobre GPU mediante operaciones de dispersión.
 - Genética cuantitativa sobre GPU: modelos lineales mixtos (LMM) con estimación REML/ML, matriz de parentesco genómica (VanRaden o GCTA) y predicción de valores de cría (BLUP).
 - Predicción genómica GBLUP en un paso con varianzas conocidas o estimadas por REML, incluyendo fiabilidad y precisión por individuo (PEV).
@@ -67,11 +67,12 @@ Genoly-GPU/
 ├── ui/
 │   ├── backend/                  # API REST FastAPI
 │   │   ├── main.py
-│   │   └── routers/              # device, qc, kmer, variants
+│   │   └── routers/              # device, qc, kmer, variants, quantitative, gblup, upload
 │   └── frontend/                 # UI React + Vite + Tailwind
 │       └── src/                  # páginas y componentes
 ├── fetchingfasta.py              # Descarga de FASTA desde NCBI por accession
 ├── clean_fetching.py             # Descarga de FASTA desde una URL directa
+├── descargar_datos_test.py       # Descarga datos reales para pruebas (datos_reales/, ignorado)
 ├── setup_genoly.ps1              # Script de instalación/estructura para Windows
 ├── Dockerfile                    # Imagen multi-stage (frontend + API con CUDA)
 ├── .dockerignore
@@ -417,7 +418,7 @@ Control de calidad sobre GPU.
 
 ### KmerCounter
 
-Conteo de k-mers acelerado por GPU (codificación base-4 + convolución 1D).
+Conteo de k-mers acelerado por GPU (codificación base-4 entera en int64, exacta hasta k=31).
 
 | Método | Descripción |
 |---|---|
@@ -427,7 +428,7 @@ Conteo de k-mers acelerado por GPU (codificación base-4 + convolución 1D).
 | `estimate_genome_size(sequences, k)` | Estimación de tamaño de genoma (Lander-Waterman). |
 
 > [!TIP]
-> Los k-mers se codifican como enteros en base 4 (A=0, C=1, G=2, T=3). Con `canonical=True` se cuenta cada k-mer junto a su reverse complement, lo que evita dobles conteos en datos de doble hebra.
+> Los k-mers se codifican como enteros en base 4 (A=0, C=1, G=2, T=3) mediante aritmética entera exacta, válida para todo k <= 31. Con `canonical=True` se cuenta cada k-mer junto a su reverse complement, lo que evita dobles conteos en datos de doble hebra.
 
 ### VariantCaller
 
@@ -515,6 +516,9 @@ Predicción genómica GBLUP sobre GPU. A diferencia de `LinearMixedModel`, permi
 | `accuracies()` | Precisión de cada individuo (√fiabilidad). |
 | `predict()` | Valores ajustados del modelo (Xβ + Zu). |
 
+> [!NOTE]
+> La fiabilidad usa el PEV del BLUP con efectos fijos **estimados** (β̂ se obtiene por BLUE): equivale al bloque inferior derecho de la inversa de las ecuaciones del modelo mixto de Henderson, es decir, PEV(u) = diag(G − GZ'PZG) con P = V⁻¹ − V⁻¹X(X'V⁻¹X)⁻¹X'V⁻¹ y G = σg²K. |
+
 ```python
 from Genoly import GenomicBLUP
 
@@ -553,6 +557,16 @@ python fetchingfasta.py
 ```bash
 python clean_fetching.py
 ```
+
+`descargar_datos_test.py` descarga datos **reales** para probar todos los análisis: genomas completos de NCBI (*E. coli* K-12 MG1655 y SARS-CoV-2 Wuhan-Hu-1), lecturas FASTQ reales de Illumina (datasets de prueba de nf-core) y el panel cuantitativo de maíz de GAPIT (fenotipos, genotipos numéricos y matriz de parentesco publicada):
+
+```bash
+python descargar_datos_test.py
+# Deja todo en datos_reales/ (ignorada por git)
+```
+
+> [!TIP]
+> La carpeta `datos_reales/` está en `.gitignore`: los datos descargados (~10 MB) nunca se suben al repositorio.
 
 > [!CAUTION]
 > Al descargar secuencias grandes desde NCBI, respeta los límites de uso de la API de E-utilities de NCBI (como máximo 3 solicitudes por segundo).
