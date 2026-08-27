@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
+import { IconChip, IconCog, IconPulse, IconFire, IconRefresh } from '../components/icons.jsx'
 
 function Row({ label, value }) {
   return (
@@ -41,8 +42,10 @@ export default function Device() {
         index="02 · Sistema"
         title="Dispositivo"
         subtitle="Detección de GPU NVIDIA y compatibilidad CUDA de PyTorch"
+        icon={<IconChip className="h-6 w-6" />}
         actions={
-          <button className="btn-ghost" onClick={load} disabled={loading}>
+          <button className="group btn-ghost" onClick={load} disabled={loading}>
+            <IconRefresh className="h-4 w-4 transition-transform duration-500 group-hover:rotate-180" />
             {loading ? 'Comprobando…' : 'Comprobar de nuevo'}
           </button>
         }
@@ -60,20 +63,23 @@ export default function Device() {
           value={nv?.gpu_name ?? '—'}
           hint={nv?.memory_total_gb ? `${nv.memory_total_gb} GB` : undefined}
           accent
+          icon={<IconChip className="h-4 w-4" />}
         />
-        <StatCard label="Driver" value={nv?.driver_version ?? '—'} />
-        <StatCard label="CUDA driver" value={nv?.cuda_version ?? '—'} />
+        <StatCard label="Driver" value={nv?.driver_version ?? '—'} icon={<IconCog className="h-4 w-4" />} />
+        <StatCard label="CUDA driver" value={nv?.cuda_version ?? '—'} icon={<IconPulse className="h-4 w-4" />} />
         <StatCard
           label="PyTorch CUDA"
           value={cudaOk ? 'Activo' : 'CPU-only'}
           hint={torch?.version}
           accent={cudaOk}
+          icon={<IconFire className="h-4 w-4" />}
         />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card
           title="Sistema NVIDIA (nvidia-smi)"
+          icon={<IconChip className="h-5 w-5" />}
           actions={
             nv?.available ? <Badge tone="ok">Detectada</Badge> : <Badge tone="bad">No</Badge>
           }
@@ -92,6 +98,7 @@ export default function Device() {
 
         <Card
           title="PyTorch"
+          icon={<IconFire className="h-5 w-5" />}
           actions={cudaOk ? <Badge tone="ok">CUDA</Badge> : <Badge tone="warn">CPU</Badge>}
         >
           <dl>

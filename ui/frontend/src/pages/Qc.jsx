@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Bar, PageHeader } from '../components/ui.jsx'
+import { IconFlask, IconList, IconPercent, IconRuler, IconStar, IconPlay } from '../components/icons.jsx'
 
 const SAMPLE =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n' +
@@ -48,10 +49,11 @@ export default function Qc() {
         index="03 · Análisis"
         title="Control de calidad"
         subtitle="GC content, composición de bases y calidad sobre GPU"
+        icon={<IconFlask className="h-6 w-6" />}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card title="Secuencias" subtitle="Una secuencia por línea (FASTA sin cabeceras)">
+        <Card title="Secuencias" icon={<IconList className="h-5 w-5" />} subtitle="Una secuencia por línea (FASTA sin cabeceras)">
           <textarea
             className="input h-56 font-mono"
             value={sequences}
@@ -62,7 +64,8 @@ export default function Qc() {
             <span className="text-xs text-ink-faint">
               {sequences.trim() ? sequences.trim().split('\n').length : 0} secuencias
             </span>
-            <button className="btn-primary" onClick={analyze} disabled={loading}>
+            <button className="group btn-primary" onClick={analyze} disabled={loading}>
+              <IconPlay className="h-4 w-4 transition-transform duration-300 group-hover:scale-125" />
               {loading ? 'Analizando…' : 'Analizar'}
             </button>
           </div>
@@ -88,20 +91,13 @@ export default function Qc() {
           {result && (
             <>
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <StatCard label="Secuencias" value={result.num_sequences} />
-                <StatCard
-                  label="GC"
-                  value={`${result.gc_content_percent.toFixed(2)}%`}
-                  accent
-                />
-                <StatCard label="Longitud media" value={`${result.mean_length} pb`} />
-                <StatCard
-                  label="Calidad media"
-                  value={result.quality_mean != null ? result.quality_mean.toFixed(1) : '—'}
-                />
+                <StatCard label="Secuencias" value={result.num_sequences} icon={<IconList className="h-4 w-4" />} />
+                <StatCard label="GC" value={`${result.gc_content_percent.toFixed(2)}%`} accent icon={<IconPercent className="h-4 w-4" />} />
+                <StatCard label="Longitud media" value={`${result.mean_length} pb`} icon={<IconRuler className="h-4 w-4" />} />
+                <StatCard label="Calidad media" value={result.quality_mean != null ? result.quality_mean.toFixed(1) : '—'} icon={<IconStar className="h-4 w-4" />} />
               </div>
 
-              <Card title="Composición de bases" subtitle="Tintes fluorescentes por nucleótido">
+              <Card title="Composición de bases" icon={<IconPercent className="h-5 w-5" />} subtitle="Tintes fluorescentes por nucleótido">
                 <div className="space-y-3">
                   {Object.entries(comp).map(([base, count]) => (
                     <div key={base} className="flex items-center gap-3">
@@ -118,7 +114,7 @@ export default function Qc() {
               </Card>
 
               {result.quality_by_position && (
-                <Card title="Calidad por posición" subtitle="Media Phred por base">
+                <Card title="Calidad por posición" icon={<IconStar className="h-5 w-5" />} subtitle="Media Phred por base">
                   <div className="flex h-24 items-end gap-0.5">
                     {result.quality_by_position.map((q, i) => (
                       <div

@@ -2,21 +2,22 @@ import { NavLink } from 'react-router-dom'
 import { ThemeSwitcher, DayNightToggle } from '../themes.jsx'
 import DnaBackdrop from './DnaBackdrop.jsx'
 import FrutigerBackdrop from './FrutigerBackdrop.jsx'
+import { IconGauge, IconChip, IconFlask, IconHash, IconDna } from './icons.jsx'
 
 const groups = [
   {
     label: 'Sistema',
     items: [
-      { to: '/', label: 'Dashboard', icon: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z' },
-      { to: '/device', label: 'Dispositivo', icon: 'M12 2a10 10 0 100 20 10 10 0 000-20zm1 4.8a1.2 1.2 0 11-2.4 0 1.2 1.2 0 012.4 0zM12 18c-3 0-5.5-2-6-5h12c-.5 3-3 5-6 5z' },
+      { to: '/', label: 'Dashboard', icon: <IconGauge className="h-5 w-5" /> },
+      { to: '/device', label: 'Dispositivo', icon: <IconChip className="h-5 w-5" /> },
     ],
   },
   {
     label: 'Análisis',
     items: [
-      { to: '/qc', label: 'Control de calidad', icon: 'M5 3a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2H5zm2 5h10v2H7V8zm0 4h6v2H7v-2z' },
-      { to: '/kmer', label: 'K-mers', icon: 'M4 7a3 3 0 016 0 3 3 0 016 0 3 3 0 016 0v2a3 3 0 01-6 0 3 3 0 01-6 0 3 3 0 01-6 0V7zm0 6a3 3 0 016 0 3 3 0 016 0 3 3 0 016 0v2a3 3 0 01-6 0 3 3 0 01-6 0 3 3 0 01-6 0v-2z' },
-      { to: '/variants', label: 'Variantes', icon: 'M7 3a1 1 0 000 2h1.586l-3.793 3.793a1 1 0 001.414 1.414L10 6.414V8a1 1 0 002 0V4a1 1 0 00-1-1H7zm11 4a1 1 0 00-1 1v1.586L13.207 5.793a1 1 0 00-1.414 1.414L15.586 9H14a1 1 0 000 2h4a1 1 0 001-1V8a1 1 0 00-1-1zM6.207 14.793L10 18.586V17a1 1 0 012 0v4a1 1 0 01-1 1H7a1 1 0 010-2h1.586l-3.793-3.793a1 1 0 011.414-1.414z' },
+      { to: '/qc', label: 'Control de calidad', icon: <IconFlask className="h-5 w-5" /> },
+      { to: '/kmer', label: 'K-mers', icon: <IconHash className="h-5 w-5" /> },
+      { to: '/variants', label: 'Variantes', icon: <IconDna className="h-5 w-5" /> },
     ],
   },
 ]
@@ -34,9 +35,7 @@ function NavItem({ item }) {
         }`
       }
     >
-      <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" fill="currentColor" aria-hidden="true">
-        <path d={item.icon} />
-      </svg>
+      <span className="icon-pop text-current">{item.icon}</span>
       <span>{item.label}</span>
     </NavLink>
   )

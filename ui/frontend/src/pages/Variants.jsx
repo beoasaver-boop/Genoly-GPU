@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
+import { IconDna, IconCog, IconChart, IconScissors, IconPulse, IconPlay, IconStack } from '../components/icons.jsx'
 
 const REF =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'
@@ -60,11 +61,12 @@ export default function Variants() {
         index="05 · Análisis"
         title="Variantes"
         subtitle="Pileup y llamada de SNVs/deleciones sobre GPU"
+        icon={<IconDna className="h-6 w-6" />}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
-          <Card title="Entrada">
+          <Card title="Entrada" icon={<IconCog className="h-5 w-5" />}>
             <label className="label">Referencia</label>
             <textarea
               className="input h-24 font-mono"
@@ -106,7 +108,8 @@ export default function Variants() {
               </div>
             </div>
 
-            <button className="btn-primary mt-3 w-full" onClick={run} disabled={loading}>
+            <button className="group btn-primary mt-3 w-full" onClick={run} disabled={loading}>
+              <IconPlay className="h-4 w-4 transition-transform duration-300 group-hover:scale-125" />
               {loading ? 'Llamando…' : 'Llamar variantes'}
             </button>
           </Card>
@@ -122,15 +125,16 @@ export default function Variants() {
           {result && (
             <>
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <StatCard label="Variantes" value={result.total_variants} accent />
-                <StatCard label="SNVs" value={result.snvs} />
-                <StatCard label="Deleciones" value={result.deletions} />
-                <StatCard label="Cobertura media" value={`${result.mean_depth}x`} />
+                <StatCard label="Variantes" value={result.total_variants} accent icon={<IconDna className="h-4 w-4" />} />
+                <StatCard label="SNVs" value={result.snvs} icon={<IconStack className="h-4 w-4" />} />
+                <StatCard label="Deleciones" value={result.deletions} icon={<IconScissors className="h-4 w-4" />} />
+                <StatCard label="Cobertura media" value={`${result.mean_depth}x`} icon={<IconChart className="h-4 w-4" />} />
               </div>
 
               <Card
                 title="Variantes detectadas"
                 subtitle="SNVs y deleciones sobre la referencia"
+                icon={<IconPulse className="h-5 w-5" />}
                 actions={<Badge tone="accent">{result.total_variants} resultados</Badge>}
               >
                 {result.variants.length === 0 ? (
@@ -170,7 +174,7 @@ export default function Variants() {
           )}
 
           {!result && !error && (
-            <Card title="Ayuda">
+            <Card title="Ayuda" icon={<IconDna className="h-5 w-5" />}>
               <p className="text-sm text-ink-faint">
                 El pileup acumula las bases de cada lectura sobre la referencia usando operaciones
                 de dispersión en GPU y compara el consenso contra la referencia.
