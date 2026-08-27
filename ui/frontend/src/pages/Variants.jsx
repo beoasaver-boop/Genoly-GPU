@@ -1,7 +1,16 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
-import { IconDna, IconCog, IconChart, IconScissors, IconPulse, IconPlay, IconStack } from '../components/icons.jsx'
+import FastaPanel from '../components/FastaPanel.jsx'
+import {
+  IconDna,
+  IconCog,
+  IconChart,
+  IconScissors,
+  IconPulse,
+  IconPlay,
+  IconStack,
+} from '../components/icons.jsx'
 
 const REF =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'
@@ -24,6 +33,7 @@ export default function Variants() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [bigFile, setBigFile] = useState(false)
 
   const run = async () => {
     setLoading(true)
@@ -66,6 +76,26 @@ export default function Variants() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
+          <FastaPanel
+            disableUpload
+            onLoaded={(info) => {
+              if (info.mode === 'inline') {
+                setBigFile(false)
+                setReference(info.records[0].sequence)
+              } else {
+                setBigFile(true)
+              }
+            }}
+          />
+
+          {bigFile && (
+            <div className="rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+              El archivo cargado es demasiado grande para el análisis de variantes; esta vista
+              trabaja con referencia y lecturas pequeñas. Para genomas completos usa Control de
+              calidad o K-mers.
+            </div>
+          )}
+
           <Card title="Entrada" icon={<IconCog className="h-5 w-5" />}>
             <label className="label">Referencia</label>
             <textarea
@@ -142,32 +172,34 @@ export default function Variants() {
                     No se detectaron variantes con los umbrales actuales.
                   </p>
                 ) : (
-                  <table className="table-base">
-                    <thead>
-                      <tr>
-                        <th>Pos</th>
-                        <th>Ref</th>
-                        <th>Alt</th>
-                        <th>Tipo</th>
-                        <th className="text-right">Frec.</th>
-                        <th className="text-right">Depth</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.variants.map((v, i) => (
-                        <tr key={i}>
-                          <td className="font-mono">{v.position}</td>
-                          <td className="font-mono">{v.ref.slice(0, 25)}</td>
-                          <td className="font-mono text-accent-glow">{v.alt}</td>
-                          <td>
-                            <Badge tone={TYPE_TONE[v.type]}>{v.type}</Badge>
-                          </td>
-                          <td className="text-right font-mono">{v.freq.toFixed(2)}</td>
-                          <td className="text-right font-mono">{v.depth}</td>
+                  <div className="overflow-x-auto">
+                    <table className="table-base min-w-[30rem]">
+                      <thead>
+                        <tr>
+                          <th>Pos</th>
+                          <th>Ref</th>
+                          <th>Alt</th>
+                          <th>Tipo</th>
+                          <th className="text-right">Frec.</th>
+                          <th className="text-right">Depth</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {result.variants.map((v, i) => (
+                          <tr key={i}>
+                            <td className="font-mono">{v.position}</td>
+                            <td className="font-mono">{v.ref.slice(0, 25)}</td>
+                            <td className="font-mono text-accent-glow">{v.alt}</td>
+                            <td>
+                              <Badge tone={TYPE_TONE[v.type]}>{v.type}</Badge>
+                            </td>
+                            <td className="text-right font-mono">{v.freq.toFixed(2)}</td>
+                            <td className="text-right font-mono">{v.depth}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </Card>
             </>

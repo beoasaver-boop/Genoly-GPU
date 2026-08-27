@@ -47,9 +47,9 @@ ENV/
 env.bak/
 venv.bak/
 
-# Excepción: contexto de transferencia para IA (sí debe viajar con el repo)
-!.env/
-!.env/contexto.md
+# Contexto proyecto
+context/
+comando.txt
 
 # IDE
 .vscode/
@@ -59,6 +59,7 @@ venv.bak/
 *~
 
 # Datos genomicos grandes
+*.fasta
 *.fastq
 *.fastq.gz
 *.bam
@@ -82,8 +83,14 @@ Thumbs.db
 # Windows
 Desktop.ini
 
+# Tunel ngrok (script local de despliegue)
+start_tunnel.ps1
+
 # Descargas NCBI / archivos temporales de secuencias
 pantera
+
+# Datos reales descargados para pruebas locales (descargar_datos_test.py)
+datos_reales/
 
 # UI (React/Vite)
 node_modules/

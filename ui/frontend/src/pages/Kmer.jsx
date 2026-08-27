@@ -1,7 +1,15 @@
 import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
-import { IconHash, IconStack, IconGlobe, IconType, IconPlay, IconChart } from '../components/icons.jsx'
+import FastaPanel from '../components/FastaPanel.jsx'
+import {
+  IconHash,
+  IconStack,
+  IconGlobe,
+  IconType,
+  IconPlay,
+  IconChart,
+} from '../components/icons.jsx'
 
 const SAMPLE =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n' +
@@ -9,8 +17,18 @@ const SAMPLE =
   'TATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATA\n' +
   'CGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCG'
 
+function FileRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5">
+      <dt className="text-sm text-ink-faint">{label}</dt>
+      <dd className="truncate font-mono text-sm text-ink">{value ?? '—'}</dd>
+    </div>
+  )
+}
+
 export default function Kmer() {
   const [sequences, setSequences] = useState(SAMPLE)
+  const [upload, setUpload] = useState(null)
   const [k, setK] = useState(21)
   const [canonical, setCanonical] = useState(true)
   const [result, setResult] = useState(null)
@@ -21,12 +39,18 @@ export default function Kmer() {
     setLoading(true)
     setError(null)
     try {
-      const seqs = sequences
-        .split('\n')
-        .map((s) => s.trim().toUpperCase())
-        .filter((s) => s.length > 0)
-      if (!seqs.length) throw new Error('Introduce al menos una secuencia')
-      const res = await api.countKmers({ sequences: seqs, k, canonical, min_abundance: 1, top: 25 })
+      let payload
+      if (upload) {
+        payload = { upload_id: upload.uploadId, k, canonical, min_abundance: 1, top: 25 }
+      } else {
+        const seqs = sequences
+          .split('\n')
+          .map((s) => s.trim().toUpperCase())
+          .filter((s) => s.length > 0)
+        if (!seqs.length) throw new Error('Introduce al menos una secuencia')
+        payload = { sequences: seqs, k, canonical, min_abundance: 1, top: 25 }
+      }
+      const res = await api.countKmers(payload)
       setResult(res)
     } catch (e) {
       setError(e.message)
@@ -49,14 +73,41 @@ export default function Kmer() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
+          <FastaPanel
+            onLoaded={(info) => {
+              if (info.mode === 'inline') {
+                setUpload(null)
+                setSequences(info.records.map((r) => r.sequence).join('\n'))
+              } else {
+                setUpload(info)
+                setResult(null)
+              }
+            }}
+          />
+
           <Card title="Parámetros" icon={<IconHash className="h-5 w-5" />}>
-            <label className="label">Secuencias</label>
-            <textarea
-              className="input h-40 font-mono"
-              value={sequences}
-              onChange={(e) => setSequences(e.target.value)}
-              spellCheck={false}
-            />
+            {upload ? (
+              <>
+                <dl>
+                  <FileRow label="Archivo" value={upload.source} />
+                  <FileRow label="Registros" value={upload.recordCount} />
+                  <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+                </dl>
+                <button className="btn-ghost mt-3 w-full" onClick={() => setUpload(null)}>
+                  Usar texto manual
+                </button>
+              </>
+            ) : (
+              <>
+                <label className="label">Secuencias</label>
+                <textarea
+                  className="input h-40 font-mono"
+                  value={sequences}
+                  onChange={(e) => setSequences(e.target.value)}
+                  spellCheck={false}
+                />
+              </>
+            )}
 
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
@@ -120,24 +171,26 @@ export default function Kmer() {
                 icon={<IconHash className="h-5 w-5" />}
                 actions={<Badge tone="accent">k={result.k}</Badge>}
               >
-                <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>K-mer</th>
-                      <th className="text-right">Frecuencia</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.top_kmers.map((km, i) => (
-                      <tr key={i}>
-                        <td className="text-ink-faint">{i + 1}</td>
-                        <td className="font-mono text-accent-glow">{km.kmer}</td>
-                        <td className="text-right font-mono">{km.count.toLocaleString()}</td>
+                <div className="overflow-x-auto">
+                  <table className="table-base min-w-[26rem]">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>K-mer</th>
+                        <th className="text-right">Frecuencia</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {result.top_kmers.map((km, i) => (
+                        <tr key={i}>
+                          <td className="text-ink-faint">{i + 1}</td>
+                          <td className="font-mono text-accent-glow">{km.kmer}</td>
+                          <td className="text-right font-mono">{km.count.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
 
               <Card title="Espectro k-mer" icon={<IconChart className="h-5 w-5" />} subtitle="Distribución de multiplicidades">
