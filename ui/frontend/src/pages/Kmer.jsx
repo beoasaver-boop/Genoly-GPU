@@ -2,6 +2,14 @@ import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
 import FastaPanel from '../components/FastaPanel.jsx'
+import {
+  IconHash,
+  IconStack,
+  IconGlobe,
+  IconType,
+  IconPlay,
+  IconChart,
+} from '../components/icons.jsx'
 
 const SAMPLE =
   'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n' +
@@ -60,6 +68,7 @@ export default function Kmer() {
         index="04 · Análisis"
         title="K-mers"
         subtitle="Conteo y espectro de k-mers acelerado por GPU (convolución 1D)"
+        icon={<IconHash className="h-6 w-6" />}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -76,7 +85,7 @@ export default function Kmer() {
             }}
           />
 
-          <Card title="Parámetros">
+          <Card title="Parámetros" icon={<IconHash className="h-5 w-5" />}>
             {upload ? (
               <>
                 <dl>
@@ -125,22 +134,24 @@ export default function Kmer() {
               </div>
             </div>
 
-            <button className="btn-primary mt-3 w-full" onClick={run} disabled={loading}>
+            <button className="group btn-primary mt-3 w-full" onClick={run} disabled={loading}>
+              <IconPlay className="h-4 w-4 transition-transform duration-300 group-hover:scale-125" />
               {loading ? 'Contando…' : 'Contar k-mers'}
             </button>
           </Card>
 
           {result && (
             <div className="grid grid-cols-2 gap-4">
-              <StatCard label="K-mers únicos" value={result.total_unique.toLocaleString()} accent />
-              <StatCard label="Total instancias" value={result.total_kmers.toLocaleString()} />
+              <StatCard label="K-mers únicos" value={result.total_unique.toLocaleString()} accent icon={<IconHash className="h-4 w-4" />} />
+              <StatCard label="Total instancias" value={result.total_kmers.toLocaleString()} icon={<IconStack className="h-4 w-4" />} />
               {result.genome_estimate && (
                 <StatCard
                   label="Estimación genoma"
                   value={`${Math.round(result.genome_estimate).toLocaleString()} pb`}
+                  icon={<IconGlobe className="h-4 w-4" />}
                 />
               )}
-              <StatCard label="k" value={result.k} />
+              <StatCard label="k" value={result.k} icon={<IconType className="h-4 w-4" />} />
             </div>
           )}
         </div>
@@ -157,6 +168,7 @@ export default function Kmer() {
               <Card
                 title="Top k-mers"
                 subtitle="Los más frecuentes"
+                icon={<IconHash className="h-5 w-5" />}
                 actions={<Badge tone="accent">k={result.k}</Badge>}
               >
                 <div className="overflow-x-auto">
@@ -181,7 +193,7 @@ export default function Kmer() {
                 </div>
               </Card>
 
-              <Card title="Espectro k-mer" subtitle="Distribución de multiplicidades">
+              <Card title="Espectro k-mer" icon={<IconChart className="h-5 w-5" />} subtitle="Distribución de multiplicidades">
                 <div className="flex h-32 items-end gap-1">
                   {Object.entries(spectrum)
                     .sort((a, b) => Number(a[0]) - Number(b[0]))

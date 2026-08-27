@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { IconSparkle, IconTerminal, IconNote, IconSun } from './components/icons.jsx'
 
 export const THEMES = [
   {
@@ -6,24 +7,28 @@ export const THEMES = [
     name: 'Biolumen',
     tagline: 'Consola fluorescente',
     swatches: ['rgb(64 224 178)', 'rgb(244 114 182)', 'rgb(74 222 128)'],
+    icon: <IconSparkle className="h-4 w-4" />,
   },
   {
     id: 'terminal',
     name: 'Terminal',
     tagline: 'CRT de fósforo',
     swatches: ['rgb(51 255 51)', 'rgb(255 196 66)', 'rgb(255 84 84)'],
+    icon: <IconTerminal className="h-4 w-4" />,
   },
   {
     id: 'notebook',
     name: 'Cuaderno',
     tagline: 'Libreta de laboratorio',
     swatches: ['rgb(41 111 235)', 'rgb(220 38 38)', 'rgb(5 150 105)'],
+    icon: <IconNote className="h-4 w-4" />,
   },
   {
     id: 'frutiger',
     name: 'Frutiger',
     tagline: 'Acuarela 2000s · día/noche',
     swatches: ['rgb(0 168 232)', 'rgb(255 255 255)', 'rgb(20 40 90)'],
+    icon: <IconSun className="h-4 w-4" />,
   },
 ]
 
@@ -105,12 +110,13 @@ export function ThemeSwitcher() {
             role="radio"
             aria-checked={active}
             onClick={() => setTheme(t.id)}
-            className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all ${
+            className={`group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all ${
               active
                 ? 'border-accent/60 bg-accent/10 shadow-glow'
                 : 'border-line/40 hover:border-line-strong/70 hover:bg-panel-2/60'
             }`}
           >
+            <span className="shrink-0 text-accent-glow/80 icon-pop">{t.icon}</span>
             <span className="flex shrink-0 -space-x-1">
               {t.swatches.map((c) => (
                 <span

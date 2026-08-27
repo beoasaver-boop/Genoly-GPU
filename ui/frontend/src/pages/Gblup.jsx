@@ -4,6 +4,16 @@ import { Card, StatCard, Badge, Bar, PageHeader } from '../components/ui.jsx'
 import PreprocessReport from '../components/PreprocessReport.jsx'
 import { makeSampleData, parseQuantData } from '../quantgen.js'
 import { parseFileGrid, preprocessGrid } from '../tabular.js'
+import {
+  IconTarget,
+  IconList,
+  IconCog,
+  IconStack,
+  IconChart,
+  IconPercent,
+  IconRuler,
+  IconPlay,
+} from '../components/icons.jsx'
 
 const SAMPLE = makeSampleData()
 
@@ -90,11 +100,12 @@ export default function Gblup() {
         index="07 · Análisis"
         title="GBLUP"
         subtitle="Predicción genómica de valores de cría con fiabilidad y precisión"
+        icon={<IconTarget className="h-6 w-6" />}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
-          <Card title="Datos de entrada">
+          <Card title="Datos de entrada" icon={<IconList className="h-5 w-5" />}>
             <label className="label">Individuos — formato: fenotipo,dosis_1,dosis_2,…</label>
             <textarea
               className="input h-72 font-mono"
@@ -137,7 +148,7 @@ export default function Gblup() {
             </p>
           </Card>
 
-          <Card title="Parámetros">
+          <Card title="Parámetros" icon={<IconCog className="h-5 w-5" />}>
             <div>
               <label className="label">Parentesco</label>
               <select
@@ -188,7 +199,8 @@ export default function Gblup() {
               </div>
             </div>
 
-            <button className="btn-primary mt-3 w-full" onClick={run} disabled={loading}>
+            <button className="group btn-primary mt-3 w-full" onClick={run} disabled={loading}>
+              <IconPlay className="h-4 w-4 transition-transform duration-300 group-hover:scale-125" />
               {loading ? 'Prediciendo…' : 'Predecir valores de cría'}
             </button>
           </Card>
@@ -204,15 +216,16 @@ export default function Gblup() {
           {result && (
             <>
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <StatCard label="Var. genética" value={result.genetic_variance.toFixed(4)} accent />
-                <StatCard label="Var. residual" value={result.residual_variance.toFixed(4)} />
-                <StatCard label="h² implícita" value={implicitH2.toFixed(3)} />
-                <StatCard label="Precisión media" value={meanAcc.toFixed(3)} />
+                <StatCard label="Var. genética" value={result.genetic_variance.toFixed(4)} accent icon={<IconStack className="h-4 w-4" />} />
+                <StatCard label="Var. residual" value={result.residual_variance.toFixed(4)} icon={<IconChart className="h-4 w-4" />} />
+                <StatCard label="h² implícita" value={implicitH2.toFixed(3)} icon={<IconPercent className="h-4 w-4" />} />
+                <StatCard label="Precisión media" value={meanAcc.toFixed(3)} icon={<IconRuler className="h-4 w-4" />} />
               </div>
 
               <Card
                 title="Valores de cría genómicos (GEBV)"
                 subtitle={`${result.n_individuals} individuos · ${result.n_markers} marcadores · parentesco ${kinshipMethod}`}
+                icon={<IconTarget className="h-5 w-5" />}
                 actions={
                   <>
                     <Badge tone="accent">
@@ -264,7 +277,7 @@ export default function Gblup() {
           )}
 
           {!result && !error && (
-            <Card title="Ayuda">
+            <Card title="Ayuda" icon={<IconTarget className="h-5 w-5" />}>
               <p className="text-sm text-ink-faint">
                 GBLUP resuelve el modelo animal en un solo paso y calcula la fiabilidad de cada
                 valor de cría a partir del error de predicción (PEV): fiabilidad =
