@@ -95,4 +95,4 @@ if secuencias_info:
     plt.tight_layout()
     plt.show()
 else:
-    print("\n❌ No se encontraron secuencias en el archivo.")
+    print("\n No se encontraron secuencias en el archivo.")

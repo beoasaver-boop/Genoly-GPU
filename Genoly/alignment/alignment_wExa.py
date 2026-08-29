@@ -294,7 +294,7 @@ def run_safe_demo():
                 print(f"Target: {result['alignment']['target']}")
                 
         except Exception as e:
-            print(f"❌ Error procesando {name}: {e}")
+            print(f" Error procesando {name}: {e}")
             print(f"Tipo de error: {type(e).__name__}")
     
     print("\n" + "=" * 60)
@@ -380,7 +380,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\n⚠️  Demo interrumpida por el usuario")
     except Exception as e:
-        print(f"\n❌ Error crítico: {e}")
+        print(f"\n Error crítico: {e}")
         print(f"\nTipo: {type(e).__name__}")
         import traceback
         print("\nTraceback completo:")

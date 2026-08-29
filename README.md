@@ -1,3 +1,4 @@
+```markdown
 # Genoly-GPU
 
 Software de aceleración por tecnología de GPU (NVIDIA por ahora) para el análisis de grandes datos del genoma.
@@ -60,6 +61,10 @@ Genoly-GPU/
 │   └── alignment/
 │       ├── alignment.py          # Clase principal GPUSequenceAligner
 │       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
+├── docker/                         # Scripts de lanzamiento y detección de GPU
+│   ├── detect_gpu.py             # Detector de GPU NVIDIA
+│   ├── launch.py                 # Lanzador inteligente (Python)
+│   └── launch.sh                 # Lanzador inteligente (bash)
 ├── docs/                           # arquitectura y documentación de producto
 ├── examples/
 │   ├── pipeline_completo.py      # Pipeline completo: I/O -> QC -> k-mers -> variantes
@@ -81,11 +86,13 @@ Genoly-GPU/
 ├── fetchingfasta.py              # Descarga de FASTA desde NCBI por accession
 ├── clean_fetching.py             # Descarga de FASTA desde una URL directa
 ├── descargar_datos_test.py       # Descarga datos reales para pruebas (datos_reales/, ignorado)
-├── setup_genoly.ps1              # Script de instalación/estructura para Windows
+├── setup_genoly.ps1              # Script de instalación para Windows
+├── setup_genoly.sh               # Script de instalación para Linux/macOS/WSL2
 ├── Dockerfile                    # Imagen multi-stage (frontend + API con CUDA)
 ├── .dockerignore
 ├── docker-compose.yml            # Orquesta el contenedor (GPU opcional)
-└── requirements.txt
+├── requirements.txt
+└── README.md
 ```
 
 ## Interfaz gráfica (UI)
@@ -110,7 +117,132 @@ Además, los análisis de larga duración sobre archivos subidos se ejecutan com
 | `GET /api/jobs/{id}` | Estado y resultado del trabajo (JSON, para polling). |
 | `GET /api/jobs/{id}/events` | Progreso en tiempo real vía **Server-Sent Events** (registros/bases leídas, micro-lotes GPU). |
 
-### Puesta en marcha
+## Instalación
+
+### Requisitos previos
+
+- **Python 3.8+** con pip y venv
+- **Node.js 20.19+** (22 LTS recomendada) para la interfaz web
+- **NVIDIA GPU** con drivers CUDA (opcional, recomendado)
+- **Docker** (opcional, para despliegue en contenedor)
+
+### Windows
+
+#### Instalación automática (PowerShell)
+
+```powershell
+# Ejecutar como Administrador
+powershell -ExecutionPolicy Bypass -File .\setup_genoly.ps1
+```
+
+El script realiza las siguientes acciones:
+1. Crea el entorno virtual `.venv` en la raíz del proyecto
+2. Instala las dependencias del proyecto (torch, numpy, openpyxl)
+3. Instala las dependencias de la API (fastapi, uvicorn, python-multipart)
+4. Detecta GPU NVIDIA y recomienda la instalación de PyTorch CUDA
+5. Opcionalmente, instala PyTorch con soporte CUDA
+
+#### Instalación manual
+
+```powershell
+# 1. Crear y activar entorno virtual
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 2. Instalar dependencias
+pip install -r requirements.txt -r ui\backend\requirements.txt
+
+# 3. (Opcional) Instalar PyTorch con CUDA si hay GPU NVIDIA
+python -m Genoly.core.gpu_setup --install
+
+# 4. Verificar instalación
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+### Linux / macOS / WSL2
+
+#### Instalación automática (bash)
+
+```bash
+# Dar permisos de ejecución y ejecutar
+chmod +x setup_genoly.sh
+./setup_genoly.sh
+```
+
+#### Instalación manual
+
+```bash
+# 1. Crear y activar entorno virtual
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 2. Instalar dependencias
+pip install -r requirements.txt -r ui/backend/requirements.txt
+
+# 3. (Opcional) Instalar PyTorch con CUDA si hay GPU NVIDIA
+python -m Genoly.core.gpu_setup --install
+
+# 4. Verificar instalación
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+### Instalación de la interfaz web (UI)
+
+La UI requiere Node.js 20.19+ (22 LTS recomendada). Verifica con `node -v`.
+
+```bash
+# Navegar al directorio del frontend
+cd ui/frontend
+
+# Instalar dependencias
+npm install
+
+# Compilar para producción
+npm run build
+
+# (Opcional) Modo desarrollo con hot-reload
+npm run dev
+```
+
+> [!WARNING]
+> Con Node.js 18 (o 20 anterior a 20.19) `npm install` y `npm run dev` fallan con `SyntaxError: The requested module "node:util" does not provide an export named styleText`. La UI usa Vite 8, que exige Node 20.19+/22.12+. Actualiza Node (nvm-windows/nvm o instalador oficial).
+
+### Instalación de GPU (NVIDIA)
+
+Si tienes una GPU NVIDIA, instala los drivers y el toolkit correspondiente:
+
+**Windows:**
+1. Descargar drivers: https://www.nvidia.com/download/index.aspx
+2. Instalar CUDA Toolkit: https://developer.nvidia.com/cuda-downloads
+3. Verificar: `nvidia-smi` en PowerShell
+
+**Linux (Ubuntu/Debian):**
+
+```bash
+# Añadir repositorio NVIDIA
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+
+# Instalar CUDA Toolkit
+sudo apt-get install -y cuda-toolkit-12-6
+
+# Verificar
+nvidia-smi
+```
+
+**WSL2:**
+
+```bash
+# Instalar drivers NVIDIA en Windows (no en WSL)
+# Desde WSL2, verificar
+nvidia-smi
+```
+
+> [!NOTE]
+> Para usar GPU dentro de Docker en WSL2, instala el nvidia-container-toolkit siguiendo: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+
+## Puesta en marcha
 
 Requisitos: **Node.js 20.19+ (se recomienda la 22 LTS)** para la UI y
 **Python 3.8+** con las dependencias del proyecto para el backend.
@@ -236,74 +368,117 @@ info = GpuSetup.detect_nvidia()
 print(info.gpu_name, info.driver_version, info.cuda_version)
 ```
 
-## Instalación
-
-### Windows (script de setup)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup_genoly.ps1
-```
-
-### Manual
-
-```bash
-# Clona o copia el proyecto, luego instala las dependencias
-pip install -r requirements.txt
-```
-
-> [!TIP]
-> Se recomienda encarecidamente usar un entorno virtual para aislar las dependencias del proyecto:
->
-> ```bash
-> python -m venv genoly_env
-> # Windows
-> genoly_env\Scripts\activate
-> # Linux/macOS
-> source genoly_env/bin/activate
-> pip install -r requirements.txt
-> ```
-
 ## Docker
 
-Genoly-GPU incluye un `Dockerfile` (multi-stage), `.dockerignore` y `docker-compose.yml` listos para levantar la API y el frontend en un contenedor.
+Genoly-GPU incluye un `Dockerfile` (multi-stage), `.dockerignore` y `docker-compose.yml` para levantar la API y el frontend en un contenedor.
 
 > [!TIP]
-> La imagen construye el frontend React en una primera etapa y en la segunda instala Python + PyTorch con CUDA 12.6 (la misma build probada con la RTX 3050). La API queda servida en `http://localhost:8000` con el frontend compilado en `/`.
+> La imagen construye el frontend React en una primera etapa y en la segunda instala Python con PyTorch. Soporta dos modos de construcción: **CPU** (imagen ligera) y **GPU** (con CUDA 12.6).
 
-### Construir y arrancar
+### Modos de construcción
+
+| Modo | Imagen base | Tamaño aprox. | Uso |
+|------|-------------|---------------|-----|
+| CPU | `python:3.12-slim` | ~300 MB | Desarrollo, máquinas sin NVIDIA |
+| GPU | `nvidia/cuda:12.6.0-runtime` | ~2.5 GB | Producción con GPU NVIDIA |
+
+> [!NOTE]
+> El modo GPU requiere tener instalado el **nvidia-container-toolkit** en el host. Si no está disponible, el contenedor funcionará en CPU automáticamente.
+
+### Lanzamiento inteligente (recomendado)
+
+Genoly-GPU incluye un lanzador que detecta automáticamente las GPUs disponibles y selecciona el modo adecuado.
+
+**Linux / macOS / WSL2:**
 
 ```bash
-# Build + arranque en un solo paso
-docker compose up --build -d
+# Lanzamiento interactivo (detecta GPU automáticamente)
+python docker/launch.py
 
-# Ver logs
-docker compose logs -f
+# O con bash
+./docker/launch.sh
 
-# Detener
-docker compose down
+# Modo CPU forzado
+python docker/launch.py --cpu
+
+# Modo GPU (todas las GPUs)
+python docker/launch.py --gpu
+
+# GPU específica (índice 1)
+python docker/launch.py --gpu-id 1
+
+# Puerto personalizado
+python docker/launch.py --port 8080 --gpu
+
+# Listar GPUs disponibles
+python docker/launch.py --list
 ```
 
-### Solo el Dockerfile
+**Windows (PowerShell):**
+
+```powershell
+# Lanzamiento interactivo
+python docker\launch.py
+
+# Modo CPU
+python docker\launch.py --cpu
+
+# Modo GPU
+python docker\launch.py --gpu
+
+# GPU específica
+python docker\launch.py --gpu-id 1
+```
+
+> [!IMPORTANT]
+> En Windows, Docker Desktop con WSL2 requiere el **nvidia-container-toolkit** instalado dentro de la distro WSL2. Consulta: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+
+### Docker Compose manual
+
+Si prefieres usar `docker compose` directamente:
 
 ```bash
-docker build -t genoly-gpu:latest .
-docker run -d --name genoly -p 8000:8000 genoly-gpu:latest
-# API:      http://localhost:8000
-# Frontend: http://localhost:8000
-# Docs:     http://localhost:8000/docs
+# CPU (por defecto)
+docker compose up -d genoly-cpu
+
+# GPU (todas)
+docker compose --profile gpu up -d genoly-gpu
+
+# GPU específica (índice 1)
+GPU_ID=1 docker compose --profile gpu-select up -d genoly-gpu-selected
+```
+
+### Construcción manual con Dockerfile
+
+```bash
+# CPU (imagen ligera)
+docker build --build-arg GENOLY_GPU_MODE=cpu -t genoly-gpu:cpu .
+
+# GPU (con CUDA)
+docker build --build-arg GENOLY_GPU_MODE=gpu -t genoly-gpu:gpu .
+
+# Ejecutar
+docker run -d --name genoly -p 8000:8000 genoly-gpu:gpu
 ```
 
 ### Comprobaciones
 
 ```bash
-docker compose ps                  # estado y healthcheck
-curl http://localhost:8000/api/health   # {"status":"ok",...}
-curl http://localhost:8000/api/device   # GPU y CUDA detectados
+# Estado del contenedor
+docker compose ps
+
+# Healthcheck
+curl http://localhost:8000/api/health
+# {"status":"ok","version":"0.1.0"}
+
+# Detección de GPU
+curl http://localhost:8000/api/device
+# {"cuda_available":true,"gpu_name":"NVIDIA GeForce RTX 3050",...}
 ```
 
 ### GPU dentro del contenedor
 
-La API funciona sin GPU (PyTorch cae a CPU automáticamente gracias a la auto-detección de Genoly). Para exponer la GPU NVIDIA al contenedor, descomenta el bloque `deploy` de `docker-compose.yml`:
+La API funciona sin GPU (PyTorch cae a CPU automáticamente gracias a la auto-detección de Genoly). Para exponer la GPU NVIDIA al contenedor, el lanzador automático se encarga de configurar el bloque `deploy` en `docker-compose.yml`:
 
 ```yaml
 deploy:
@@ -320,6 +495,16 @@ deploy:
 
 > [!NOTE]
 > En Docker Desktop con WSL2, si la distro ya tiene configurado el toolkit, la GPU puede estar disponible incluso sin el bloque `deploy`. Comprueba con `curl http://localhost:8000/api/device` (campo `cuda_available`).
+
+### Solución de problemas en Docker
+
+| Problema | Solución |
+|----------|----------|
+| `CUDA driver version is insufficient` | Actualizar drivers NVIDIA. Mínimo: 545.23.06 para CUDA 12.6 |
+| `nvidia-smi: command not found` | Instalar drivers NVIDIA y `nvidia-utils` (Linux) |
+| `Permission denied: /var/run/docker.sock` | Añadir usuario al grupo `docker`: `sudo usermod -aG docker $USER` |
+| El contenedor no detecta la GPU | Verificar `nvidia-container-toolkit`: `nvidia-smi` dentro del contenedor |
+| `docker: 'compose' is not a docker command` | Usar `docker-compose` en sistemas antiguos, o actualizar Docker |
 
 ## Pipeline de streaming (archivos multi-GB)
 
@@ -697,9 +882,12 @@ python descargar_datos_test.py
 - [x] Auto-detección de la GPU e instalación automática de PyTorch CUDA.
 - [x] Despliegue en contenedor Docker (API + frontend, CUDA opcional).
 - [x] Pipeline de streaming para datasets masivos: chunking de disco, RAM batching, micro-batching adaptativo de VRAM y progreso en tiempo real (SSE).
+- [x] Lanzador inteligente de Docker con detección automática de GPU y selección de dispositivo.
+- [x] Scripts de instalación automática para Windows (PowerShell) y Linux (bash).
 - [ ] Soporte real de paralelización por lotes en GPU para el alineador.
 - [ ] Llamada de inserciones mediante CIGAR (lecturas alineadas).
 - [ ] Exportación a formatos estándar (SAM/BAM, VCF).
+- [ ] Anotación funcional de variantes (efecto sobre proteínas, dominios conservados).
 
 ## Licencia
 
@@ -707,3 +895,4 @@ MIT
 
 > [!NOTE]
 > Este proyecto está en fase alpha (Development Status 3 - Alpha). Las APIs pueden cambiar en futuras versiones.
+```

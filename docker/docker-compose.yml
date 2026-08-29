@@ -1,0 +1,96 @@
+services:
+  # ================================================================
+  # Servicio BASE (CPU por defecto, sin GPU)
+  # ================================================================
+  genoly-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - GENOLY_GPU_MODE=cpu
+        - GENOLY_PORT=${GENOLY_PORT:-8000}
+    image: genoly-gpu:cpu-${GENOLY_TAG:-latest}
+    container_name: genoly-gpu-cpu
+    ports:
+      - "${GENOLY_PORT:-8000}:${GENOLY_PORT:-8000}"
+    environment:
+      - GENOLY_DEVICE=cpu
+      - GENOLY_PORT=${GENOLY_PORT:-8000}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ================================================================
+  # Perfil GPU (se activa con --profile gpu)
+  # Detecta automáticamente todas las GPUs disponibles
+  # ================================================================
+  genoly-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - GENOLY_GPU_MODE=gpu
+        - GENOLY_PORT=${GENOLY_PORT:-8000}
+    image: genoly-gpu:gpu-${GENOLY_TAG:-latest}
+    container_name: genoly-gpu-gpu
+    ports:
+      - "${GENOLY_PORT:-8000}:${GENOLY_PORT:-8000}"
+    environment:
+      - GENOLY_DEVICE=cuda
+      - GENOLY_PORT=${GENOLY_PORT:-8000}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
+    restart: unless-stopped
+    profiles: ["gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ================================================================
+  # Perfil GPU SELECT (para elegir GPU específica)
+  # Uso: GPU_ID=1 docker compose --profile gpu-select up -d
+  # ================================================================
+  genoly-gpu-selected:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - GENOLY_GPU_MODE=gpu
+        - GENOLY_PORT=${GENOLY_PORT:-8000}
+    image: genoly-gpu:gpu-${GENOLY_TAG:-latest}
+    container_name: genoly-gpu-gpu-${GPU_ID:-0}
+    ports:
+      - "${GENOLY_PORT:-8000}:${GENOLY_PORT:-8000}"
+    environment:
+      - GENOLY_DEVICE=cuda
+      - GENOLY_PORT=${GENOLY_PORT:-8000}
+      - CUDA_VISIBLE_DEVICES=${GPU_ID:-0}
+    restart: unless-stopped
+    profiles: ["gpu-select"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              device_ids: ["${GPU_ID:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
