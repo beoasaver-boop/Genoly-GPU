@@ -82,10 +82,14 @@ class _PartitionedKmerAccumulator:
     2. Cuando el buffer de una partición supera ``spill_rows``, se
        derrama a un par de ficheros ``.npy`` (valores int64, conteos
        int32) y se libera la RAM.
-    3. ``finalize`` recorre las particiones una a una: concatena sus
-       derrames (mmap + buffer), fusiona duplicados sumando conteos y
-       cede el resultado parcial. El pico de RAM es
-       O(filas_de_la_particion) ≈ total/P + margen, nunca el total.
+    3. ``finalize`` acumula particiones consecutivas hasta reunir
+       ``group_rows`` filas, deduplica cada grupo en una sola llamada
+       GPU (``torch.unique`` + ``index_add_``) y cede el resultado
+       parcial. Como cada grupo contiene particiones completas (dos
+       copias del mismo k-mer caen siempre en la misma partición), el
+       resultado es exacto. El pico de RAM es
+       O(filas_del_grupo) ≈ total/P × particiones_por_grupo, nunca el
+       total.
 
     El consumidor debe llamar a ``close()`` (limpia los temporizables),
     idealmente en un ``finally``.
@@ -95,14 +99,18 @@ class _PartitionedKmerAccumulator:
                  n_partitions: int = N_PARTITIONS,
                  spill_rows: int = SPILL_ROWS_PER_PARTITION,
                  spill_dir: Optional[str] = None,
-                 device=None):
+                 device=None,
+                 group_rows: int = GPU_BATCH_ROWS):
         if n_partitions < 1 or (n_partitions & (n_partitions - 1)) != 0:
             raise ValueError("n_partitions debe ser potencia de 2")
         if spill_rows < 1:
             raise ValueError("spill_rows debe ser >= 1")
+        if group_rows < 1:
+            raise ValueError("group_rows debe ser >= 1")
 
         self.n_partitions = n_partitions
         self.spill_rows = spill_rows
+        self.group_rows = group_rows
         self.device = device
         self._owns_dir = spill_dir is None
         self._tmp = (tempfile.TemporaryDirectory(prefix="genoly_kmer_")
@@ -127,114 +135,213 @@ class _PartitionedKmerAccumulator:
         reordenaría los valores dentro de cada partición y los runs del
         derrame dejarían de estar ordenados (la fusión final O(n) los
         exige ordenados).
+
+        Fase 3: en lugar de un ``.cpu()`` sincronizante por partición
+        (256 transferencias D2H por micro-lote), se hace UN único D2H
+        del array ya ordenado (valores int64 + conteos int32) y el
+        troceado por partición se hace en CPU con numpy (bincount sobre
+        los valores ordenados: ``valor & (P-1)`` es el pid de cada fila).
+        Los slices son vistas del array D2H: el pico de RAM es el mismo
+        que con copias (las particiones acumulan de forma uniforme).
         """
         if values.numel() == 0:
             return
 
-        pid = values & (self.n_partitions - 1)
-        order = torch.argsort(pid, stable=True)
-        sizes = torch.bincount(pid, minlength=self.n_partitions)
+        order = torch.argsort(values & (self.n_partitions - 1),
+                              stable=True)
+        sv = values[order].cpu().numpy()
+        sc = counts[order].to(torch.int32).cpu().numpy()
+        sizes = np.bincount(sv & (self.n_partitions - 1),
+                            minlength=self.n_partitions)
 
         offset = 0
         for p, size in enumerate(sizes.tolist()):
             if size == 0:
                 continue
-            v = values[order[offset:offset + size]].cpu()
-            c = counts[order[offset:offset + size]].to(torch.int32).cpu()
-            offset += size
+            self._buffer[p].append((sv[offset:offset + size],
+                                    sc[offset:offset + size]))
+            offset += int(size)
 
-            self._buffer[p].append((v, c))
-            self._buffered[p] += int(v.shape[0])
-            self.total_rows += int(v.shape[0])
+            self._buffered[p] += int(size)
+            self.total_rows += int(size)
             if self._buffered[p] >= self.spill_rows:
                 self._spill(p)
 
     def _spill(self, p: int) -> None:
-        # cada slice bufferizado es su propio fichero: las slices de
+        # cada slice bufferizada es su propio fichero: las slices de
         # micro-lotes distintos NO forman un run ordenado si se
         # concatenan (los rangos de valores se intercalan)
         for v, c in self._buffer[p]:
             base = self.spill_dir / f"p{p}_{len(self._files[p])}"
-            np.save(base.with_suffix(".v.npy"), v.numpy())
-            np.save(base.with_suffix(".c.npy"), c.numpy())
+            np.save(base.with_suffix(".v.npy"), v)
+            np.save(base.with_suffix(".c.npy"), c)
             self._files[p].append((base.with_suffix(".v.npy"),
                                    base.with_suffix(".c.npy")))
-            self.total_rows += 0  # ya contado en add
         self._buffer[p].clear()
         self._buffered[p] = 0
 
     def finalize(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
         """
-        Cede (valores únicos, conteos) agregados, partición a partición,
-        en orden de partición (no global).
+        Cede (valores únicos, conteos) agregados, por grupos de
+        particiones consecutivas (no en orden global), en el DISPOSITIVO
+        del acumulador (CPU solo cuando ``device`` es None).
 
-        La deduplicación de cada partición se hace en el dispositivo
-        (``torch.unique`` + ``index_add_``): tras el streaming la VRAM
-        está libre y cada partición es pequeña (total/256 filas), por lo
-        que el sort en GPU tarda milisegundos frente a los segundos que
-        costaría en CPU. Para particiones mayores que
-        ``GPU_BATCH_ROWS`` (genomas enormes) se procesa por trozos y los
-        trozos resultantes (ordenados y únicos) se fusionan en CPU con
-        :meth:`_merge_two_runs`.
+        La deduplicación se hace en el dispositivo (``torch.unique`` +
+        ``index_add_``). Fase 3: se acumulan particiones consecutivas
+        sin rebasar ``group_rows`` filas y se deduplica cada grupo en
+        una sola llamada (antes: una llamada por partición, ~52 ms de
+        H2D+unique+D2H cada una). Es exacto porque cada grupo contiene
+        particiones COMPLETAS: dos copias del mismo k-mer caen siempre
+        en la misma partición, y el resultado de ``torch.unique`` es
+        global del grupo. El consumidor solo suma estadísticas y top-k,
+        así que el orden entre cedas no afecta al resultado final.
 
-        El pico de RAM es O(filas_de_la_particion) y el de VRAM
-        O(min(filas_particion, GPU_BATCH_ROWS) * ~44 B).
+        Para grupos mayores que ``group_rows`` (particiones sesgadas o
+        genomas enormes) el grupo se procesa por trozos y los trozos
+        resultantes (ordenados y únicos) se fusionan en CPU con
+        :meth:`_merge_two_runs`; en ese caso la ceda del grupo vuelve
+        como tensores CPU.
+
+        El pico de RAM es O(filas_del_grupo) y el de VRAM
+        O(min(filas_grupo, group_rows) * ~44 B).
         """
         try:
+            mmaps: List[np.ndarray] = []
+            runs: List[Tuple[np.ndarray, np.ndarray]] = []
+            pending: List[int] = []
+            group_rows_sum = 0
+
+            def close_mmaps() -> None:
+                # Windows bloquea los ficheros con mmaps abiertos: hay
+                # que cerrarlos antes de que _release_all borre los
+                # derrames. Los arrays cedidos siempre tienen datos
+                # propios (salida de concatenate/merge), nunca vistas de
+                # mmap, así que cerrarlos tras procesar el grupo es seguro.
+                for arr in mmaps:
+                    mmap = getattr(arr, "_mmap", None)
+                    if mmap is not None:
+                        mmap.close()
+                mmaps.clear()
+
+            def clear_pending() -> None:
+                for q in pending:
+                    self._buffer[q].clear()
+                    self._buffered[q] = 0
+                pending.clear()
+
+            def flush() -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+                nonlocal runs, pending, group_rows_sum
+                try:
+                    yield from self._dedupe_runs(runs)
+                finally:
+                    close_mmaps()
+                    clear_pending()
+                    runs = []
+                    pending = []
+                    group_rows_sum = 0
+
             for p in range(self.n_partitions):
                 if not self._buffer[p] and not self._files[p]:
                     continue
 
-                mmaps: List[np.ndarray] = []
-                try:
-                    runs: List[Tuple[np.ndarray, np.ndarray]] = []
-                    for path_v, path_c in self._files[p]:
-                        av = np.load(path_v, mmap_mode="r")
-                        ac = np.load(path_c, mmap_mode="r")
-                        mmaps.extend((av, ac))
-                        runs.append((av, ac))
-                    # cada slice bufferizada es su propio run (ordenada
-                    # dentro de si misma; concatenarlas no lo estaria)
-                    for v_t, c_t in self._buffer[p]:
-                        runs.append((v_t.numpy(), c_t.numpy()))
+                # abrir los derrames de p (mmap perezoso: solo cabecera),
+                # AUN sin registrarlos: si p desborda el grupo, el flush
+                # de abajo cierra los mmaps del grupo ANTERIOR y los de p
+                # deben sobrevivirle (leer un mmap cerrado = access
+                # violation en Windows)
+                nuevos_mmaps: List[np.ndarray] = []
+                nuevos: List[Tuple[np.ndarray, np.ndarray]] = []
+                for path_v, path_c in self._files[p]:
+                    # mmap copy-on-write: escribible para torch (evita el
+                    # aviso de arrays read-only y las copias preventivas),
+                    # con lecturas zero-copy paginadas desde disco
+                    av = np.load(path_v, mmap_mode="c")
+                    ac = np.load(path_c, mmap_mode="c")
+                    nuevos_mmaps.extend((av, ac))
+                    nuevos.append((av, ac))
+                # cada slice bufferizada es su propio run (ordenada
+                # dentro de si misma; concatenarlas no lo estaria)
+                for v_t, c_t in self._buffer[p]:
+                    nuevos.append((v_t, c_t))
+                p_rows = sum(int(r[0].shape[0]) for r in nuevos)
 
-                    out_v: Optional[np.ndarray] = None
-                    out_c: Optional[np.ndarray] = None
-                    for chunk in self._chunks_of_rows(runs,
-                                                      GPU_BATCH_ROWS):
-                        v = np.concatenate([r[0] for r in chunk])
-                        c = np.concatenate([r[1] for r in chunk])
-                        tv = torch.from_numpy(v).to(self.device)
-                        tc = torch.from_numpy(c).to(self.device)
-                        uv, inverse = torch.unique(tv, return_inverse=True)
-                        uc = torch.zeros(
-                            uv.numel(), dtype=torch.int64,
-                            device=self.device).index_add_(
-                                0, inverse, tc.to(torch.int64))
-                        del tv, tc, inverse
-                        chunk_out = (uv.cpu().numpy(), uc.cpu().numpy())
-                        del uv, uc
-                        if out_v is None:
-                            out_v, out_c = chunk_out
-                        else:
-                            out_v, out_c = self._merge_two_runs(
-                                out_v, out_c, chunk_out[0], chunk_out[1])
-                finally:
-                    # cierra los mmap de la particion pase lo que pase
-                    # (Windows bloquea los ficheros abiertos y el cleanup
-                    # de derrames fallaria)
-                    for arr in mmaps:
-                        mmap = getattr(arr, "_mmap", None)
-                        if mmap is not None:
-                            mmap.close()
-                    mmaps.clear()
-                    self._buffer[p].clear()
-                    self._buffered[p] = 0
+                # flush ANTES de añadir p si desbordaría el grupo: así
+                # cada grupo cabe en un único trozo de GPU (sin fusión)
+                if runs and group_rows_sum + p_rows > self.group_rows:
+                    yield from flush()
 
-                yield (torch.from_numpy(np.ascontiguousarray(out_v)),
-                       torch.from_numpy(np.ascontiguousarray(out_c)))
+                mmaps.extend(nuevos_mmaps)
+                runs.extend(nuevos)
+                pending.append(p)
+                group_rows_sum += p_rows
+
+            if runs:
+                yield from flush()
         finally:
+            close_mmaps()
             self._release_all()
+
+    def _dedupe_runs(
+            self, runs: List[Tuple[np.ndarray, np.ndarray]]
+            ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Deduplica una lista de runs (ordenados individualmente) en el
+        dispositivo por trozos de ``group_rows`` filas, fusionando los
+        resultados parciales con :meth:`_merge_two_runs` y cediendo el
+        resultado global del grupo (ordenado y único) en el dispositivo.
+
+        Con un solo trozo (el caso normal, grupo ``<= group_rows``) el
+        resultado no baja de la GPU; con varios trozos la fusión se hace
+        en CPU y la ceda del grupo es un tensor CPU.
+        """
+        chunks = list(self._chunks_of_rows(runs, self.group_rows))
+        if len(chunks) == 1:
+            # montar el lote DIRECTAMENTE en GPU (un H2D por run, a un
+            # buffer prealocado): evita el concatenate en RAM (~500
+            # copias dispersas + 384 MB intermedios) y el doble toque de
+            # los derrames en disco
+            chunk = chunks[0]
+            total = sum(int(r[0].shape[0]) for r in chunk)
+            tv = torch.empty(total, dtype=torch.int64, device=self.device)
+            tc = torch.empty(total, dtype=torch.int32, device=self.device)
+            pos = 0
+            for av, ac in chunk:
+                n = int(av.shape[0])
+                tv[pos:pos + n].copy_(torch.from_numpy(np.asarray(av)))
+                tc[pos:pos + n].copy_(torch.from_numpy(np.asarray(ac)))
+                pos += n
+            uv, inverse = torch.unique(tv, return_inverse=True)
+            uc = torch.zeros(
+                uv.numel(), dtype=torch.int64,
+                device=self.device).index_add_(
+                    0, inverse, tc.to(torch.int64))
+            del tv, tc, inverse
+            yield uv, uc
+            return
+
+        out_v: Optional[np.ndarray] = None
+        out_c: Optional[np.ndarray] = None
+        for chunk in chunks:
+            v = np.concatenate([r[0] for r in chunk])
+            c = np.concatenate([r[1] for r in chunk])
+            tv = torch.from_numpy(v).to(self.device)
+            tc = torch.from_numpy(c).to(self.device)
+            uv, inverse = torch.unique(tv, return_inverse=True)
+            uc = torch.zeros(
+                uv.numel(), dtype=torch.int64,
+                device=self.device).index_add_(
+                    0, inverse, tc.to(torch.int64))
+            del tv, tc, inverse
+            chunk_out = (uv.cpu().numpy(), uc.cpu().numpy())
+            del uv, uc
+            if out_v is None:
+                out_v, out_c = chunk_out
+            else:
+                out_v, out_c = self._merge_two_runs(
+                    out_v, out_c, chunk_out[0], chunk_out[1])
+        if out_v is not None:
+            yield (torch.from_numpy(np.ascontiguousarray(out_v)),
+                   torch.from_numpy(np.ascontiguousarray(out_c)))
 
     @staticmethod
     def _chunks_of_rows(runs: List[Tuple[np.ndarray, np.ndarray]],
@@ -737,6 +844,7 @@ class KmerCounter:
         """
         stats = {"units_done": 0, "bases_done": 0, "micro_batches": 0,
                  "window_size": int(window_size)}
+        micro_index = 0  # persiste entre lotes de RAM para release_every
 
         def emit_progress() -> None:
             if on_progress is not None:
@@ -747,6 +855,7 @@ class KmerCounter:
         def process(batch: List[np.ndarray]
                     ) -> Iterator[Tuple[Optional[torch.Tensor],
                                         Optional[torch.Tensor]]]:
+            nonlocal micro_index
             lengths = [a.size for a in batch]
             for group in manager.plan_micro_batches(lengths,
                                                     CODES_BYTES_PER_BASE):
@@ -763,7 +872,9 @@ class KmerCounter:
                 values, counts = self._count_codes_micro_batch(
                     codes_t, k, canonical)
                 del codes_t, codes
-                if manager.release_after_each:
+                micro_index += 1
+                if manager.release_after_each and (
+                        micro_index % manager.release_every == 0):
                     manager.release()
                 emit_progress()
                 yield values, counts
@@ -806,6 +917,7 @@ class KmerCounter:
 
         stats = {"units_done": 0, "bases_done": 0, "micro_batches": 0,
                  "window_size": int(window_size or 0)}
+        micro_index = 0  # persiste entre lotes de RAM para release_every
 
         def emit_progress() -> None:
             if on_progress is not None:
@@ -815,6 +927,7 @@ class KmerCounter:
 
         def process(batch: List[str]) -> Iterator[Tuple[
                 Optional[torch.Tensor], Optional[torch.Tensor]]]:
+            nonlocal micro_index
             lengths = [len(u) for u in batch]
             for group in manager.plan_micro_batches(lengths, bytes_per_base):
                 seqs = [batch[i] for i in group]
@@ -822,7 +935,9 @@ class KmerCounter:
                 stats["micro_batches"] += 1
                 stats["units_done"] += len(group)
                 stats["bases_done"] += sum(lengths[i] for i in group)
-                if manager.release_after_each:
+                micro_index += 1
+                if manager.release_after_each and (
+                        micro_index % manager.release_every == 0):
                     manager.release()
                 emit_progress()
                 yield values, counts
@@ -859,8 +974,8 @@ class KmerCounter:
         2. VRAM: cada lote se divide en micro-lotes adaptativos con
            ``VRAMManager.plan_micro_batches`` usando el coste
            ``estimate_kmer_bytes_per_base(k, canonical)``; tras cada
-           micro-lote se fuerza ``gc.collect()`` y
-           ``torch.cuda.empty_cache()``.
+           ``release_every``-ésimo micro-lote se fuerza ``gc.collect()``
+           y ``torch.cuda.empty_cache()``.
         3. Agregación: los pares (valores, conteos) parciales se fusionan
            en CPU y se compactan al superar ``MERGE_THRESHOLD_ELEMENTS``.
 
@@ -945,11 +1060,12 @@ class KmerCounter:
                                window_size: Optional[int] = None,
                                vram: Optional[VRAMManager] = None,
                                on_progress: Optional[Callable[[dict], None]] = None,
-                               n_partitions: int = N_PARTITIONS,
-                               spill_rows: int = SPILL_ROWS_PER_PARTITION,
-                               spill_dir: Optional[str] = None,
-                               block_size: int = DEFAULT_BLOCK_SIZE,
-                               ) -> Dict[str, object]:
+                                n_partitions: int = N_PARTITIONS,
+                                spill_rows: int = SPILL_ROWS_PER_PARTITION,
+                                spill_dir: Optional[str] = None,
+                                block_size: int = DEFAULT_BLOCK_SIZE,
+                                release_every: int = 4,
+                                ) -> Dict[str, object]:
         """
         Conteo de k-mers sobre un archivo FASTA de cualquier tamaño con
         RAM, VRAM y disco acotadas, devolviendo **solo estadísticas
@@ -979,6 +1095,11 @@ class KmerCounter:
             spill_dir: Directorio de derrame (por defecto, temporal del
                 sistema, eliminado al terminar).
             block_size: Tamaño del bloque de lectura de disco.
+            release_every: Liberar VRAM/RAM (``gc + empty_cache``) cada N
+                micro-lotes en vez de tras cada uno; 4 reduce el coste
+                fijo sin riesgo (los presupuestos intermedios son algo
+                menores). Solo se aplica al gestor creado por defecto;
+                si se pasa ``vram``, manda el ajuste de ese objeto.
 
         Returns:
             Dict con ``k``, ``total_unique``, ``total_kmers``,
@@ -988,8 +1109,11 @@ class KmerCounter:
         self._check_k(k)
         if top < 0:
             raise ValueError("top debe ser >= 0")
+        if release_every < 1:
+            raise ValueError("release_every debe ser >= 1")
 
-        manager = vram if vram is not None else VRAMManager(self.device)
+        manager = vram if vram is not None else VRAMManager(
+            self.device, release_every=release_every)
         accumulator = _PartitionedKmerAccumulator(
             n_partitions=n_partitions, spill_rows=spill_rows,
             spill_dir=spill_dir, device=self.device)
@@ -1033,6 +1157,11 @@ class KmerCounter:
                         del values, counts
 
             for u_v, u_c in accumulator.finalize():
+                # finalize cede en el dispositivo (CPU en la fusión por
+                # trozos): normalizar para que las estadísticas y el
+                # top-k se calculen en GPU, no en CPU
+                u_v = u_v.to(self.device)
+                u_c = u_c.to(self.device)
                 if min_abundance > 1:
                     keep = u_c >= min_abundance
                     u_v, u_c = u_v[keep], u_c[keep]
@@ -1048,8 +1177,14 @@ class KmerCounter:
 
                 if top > 0:
                     t = min(top, u_c.shape[0])
-                    top_counts, top_idx = torch.topk(u_c, t)
-                    top_list.extend(zip(top_counts.tolist(),
+                    # topk no define el orden de los empates (arbitrario
+                    # en CUDA) y con finalize agrupado ya no hay rondas
+                    # intermedias que los re-ordenen: se usa argsort
+                    # estable descendente, que deja los empates en orden
+                    # de código ascendente (u_v viene ordenado de unique),
+                    # el mismo contrato del re-ordenado de top_list.
+                    top_idx = torch.argsort(-u_c, stable=True)[:t]
+                    top_list.extend(zip(u_c[top_idx].tolist(),
                                         u_v[top_idx].tolist()))
                     top_list.sort(key=lambda x: (-x[0], x[1]))
                     del top_list[top:]
@@ -1216,14 +1351,17 @@ class KmerCounter:
         if v.numel() == 0:
             return v, c.to(torch.int64)
 
-        new = torch.empty(v.shape[0], dtype=torch.bool)
+        # Todo debe vivir en el dispositivo de entrada: la ruta en RAM
+        # (count) pasa tensores de CUDA y la de streaming, de CPU.
+        device = v.device
+        new = torch.empty(v.shape[0], dtype=torch.bool, device=device)
         new[0] = True
         if v.numel() > 1:
             new[1:] = v[1:] != v[:-1]
 
         u_v = v[new]
         seg = torch.cumsum(new.to(torch.int64), dim=0) - 1
-        u_c = torch.zeros(u_v.shape[0], dtype=torch.int64)
+        u_c = torch.zeros(u_v.shape[0], dtype=torch.int64, device=device)
         u_c.index_add_(0, seg, c.to(torch.int64))
         return u_v, u_c
 

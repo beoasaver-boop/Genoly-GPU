@@ -187,6 +187,14 @@ class VRAMManager:
             de re-alocar bloques CUDA en el siguiente micro-lote; con
             micro-lotes grandes (>= 64 MiB) ese coste es despreciable
             frente al cómputo.
+        release_every: liberar cada N micro-lotes en lugar de tras cada
+            uno (solo surte efecto con ``release_after_each=True``). Los
+            consumidores respetan este ajuste con un contador; valores
+            de 4-8 reducen el coste fijo ``gc + empty_cache`` (~33 ms
+            por llamada) en pipelines de muchos micro-lotes pequeños.
+            El presupuesto se recalcula con la VRAM no liberada, así que
+            los micro-lotes intermedios son algo menores (auto-equilibrado,
+            nunca más agresivo que con N=1).
     """
 
     def __init__(self,
@@ -194,13 +202,16 @@ class VRAMManager:
                  safety_fraction: float = DEFAULT_SAFETY_FRACTION,
                  min_budget_bytes: int = DEFAULT_MIN_BUDGET_BYTES,
                  max_items: int = DEFAULT_MAX_ITEMS,
-                 release_after_each: bool = True):
+                 release_after_each: bool = True,
+                 release_every: int = 1):
         if not 0.0 < safety_fraction <= 1.0:
             raise ValueError("safety_fraction debe estar en (0, 1]")
         if min_budget_bytes < 1:
             raise ValueError("min_budget_bytes debe ser >= 1")
         if max_items < 1:
             raise ValueError("max_items debe ser >= 1")
+        if release_every < 1:
+            raise ValueError("release_every debe ser >= 1")
 
         self.manager = DeviceManager(device)
         self.device = self.manager.device
@@ -208,6 +219,7 @@ class VRAMManager:
         self.min_budget_bytes = int(min_budget_bytes)
         self.max_items = int(max_items)
         self.release_after_each = bool(release_after_each)
+        self.release_every = int(release_every)
 
     # ------------------------------------------------------------------ #
     # Medición de memoria
