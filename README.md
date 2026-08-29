@@ -112,11 +112,24 @@ Además, los análisis de larga duración sobre archivos subidos se ejecutan com
 
 ### Puesta en marcha
 
-Requisitos: Node.js 18+ y las dependencias de Python (ver arriba).
+Requisitos: **Node.js 20.19+ (se recomienda la 22 LTS)** para la UI y
+**Python 3.8+** con las dependencias del proyecto para el backend.
+Comprueba las versiones antes de empezar (`node -v` y `python --version`).
+
+> [!WARNING]
+> Con Node.js 18 (o 20 anterior a 20.19) `npm install` y `npm run dev`
+> fallan con
+> `SyntaxError: The requested module "node:util" does not provide an export named styleText`:
+> la UI usa Vite 8, que exige Node 20.19+/22.12+. Actualiza Node
+> (nvm-windows/nvm o instalador oficial) y vuelve a ejecutar `npm install`.
 
 ```bash
-# 1. Backend (FastAPI + uvicorn) — desde la RAÍZ del proyecto
-pip install -r ui/backend/requirements.txt
+# 1. Backend (FastAPI + uvicorn) — entorno virtual recomendado
+python -m venv .venv
+.venv\Scripts\Activate.ps1              # Windows PowerShell
+# source .venv/bin/activate             # Linux/macOS
+# instala las dependencias de Genoly (torch, numpy, ...) Y las de la API
+pip install -r requirements.txt -r ui/backend/requirements.txt
 python -m uvicorn ui.backend.main:app --host 0.0.0.0 --port 8000
 # Documentación de la API: http://localhost:8000/docs
 
@@ -125,7 +138,7 @@ python -m uvicorn ui.backend.main:app --host 0.0.0.0 --port 8000
 cd ui/backend
 uvicorn main:app --host 0.0.0.0 --port 8000
 
-# 2. Frontend (dev con hot-reload)
+# 2. Frontend (dev con hot-reload) — Node.js 20.19+/22 LTS
 cd ui/frontend
 npm install
 npm run dev        # http://localhost:5173
@@ -144,6 +157,7 @@ npm run build      # genera ui/frontend/dist
 ## Requisitos
 
 - Python 3.8 o superior.
+- Node.js 20.19 o superior (solo para la interfaz web: `npm install`/`npm run build`; se recomienda la 22 LTS).
 - NVIDIA GPU con drivers CUDA (recomendado, no obligatorio).
 - Dependencias:
 
