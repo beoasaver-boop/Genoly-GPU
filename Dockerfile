@@ -7,8 +7,10 @@
 
 # ============================================================================ #
 # STAGE 1: build del frontend React (Vite + Tailwind)
+# Vite 8 exige Node 20.19+/22.12+ (node:20-alpine flotante ya cae en 20.19+,
+# pero fijamos 22 LTS para builds reproducibles)
 # ============================================================================ #
-FROM node:20-alpine AS frontend-build
+FROM node:22-alpine AS frontend-build
 
 WORKDIR /app/ui/frontend
 

@@ -50,6 +50,7 @@ venv.bak/
 # Contexto proyecto
 context/
 comando.txt
+contexto.md
 
 # IDE
 .vscode/

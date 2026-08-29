@@ -4,8 +4,11 @@ Software de aceleración por tecnología de GPU (NVIDIA por ahora) para el anál
 
 Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O de FASTA/FASTQ, control de calidad, conteo de k-mers, alineamiento, codificación a tensores y llamada de variantes— todo acelerado por GPUs NVIDIA a través de PyTorch y CUDA.
 
+> 📚 **Documentación extendida**: [docs/que-es-genoly.md](docs/que-es-genoly.md) (qué es, necesidad y diferenciación) y [docs/arquitectura.md](docs/arquitectura.md) (arquitectura técnica y decisiones de diseño).
+
 ## Caracteristicas
 
+- **Pipeline de streaming para archivos multi-GB**: lectura por bloques de disco (64 KiB), RAM batching de registros, micro-lotes adaptativos de GPU según la VRAM libre y liberación de memoria tras cada micro-lote. Procesa genomas completos sin OOM (ver [Pipeline de streaming](#pipeline-de-streaming-archivos-multi-gb)).
 - Lectura/escritura de FASTA y FASTQ en streaming (consumo de memoria reducido), con soporte de FASTQ multi-registro y multilínea Illumina.
 - Codificación de secuencias a tensores enteros y one-hot sobre GPU.
 - Control de calidad: contenido GC, composición de bases y distribución de calidad Phred, con trimming y filtrado de lecturas.
@@ -34,16 +37,17 @@ Genoly-GPU/
 │   ├── __init__.py
 │   ├── core/
 │   │   ├── device.py             # DeviceManager: detección y gestión de GPU/CUDA
-│   │   └── gpu_setup.py          # Auto-detección nvidia-smi e instalación de PyTorch CUDA
+│   │   ├── gpu_setup.py          # Auto-detección nvidia-smi e instalación de PyTorch CUDA
+│   │   └── vram.py               # VRAMManager: micro-batching adaptativo y VRAM dinámica
 │   ├── io/
-│   │   ├── fasta.py              # Lectura/escritura FASTA en streaming
+│   │   ├── fasta.py              # FASTA por bloques de disco, lotes de RAM y ventanas
 │   │   └── fastq.py              # Lectura/escritura FASTQ con calidad Phred
 │   ├── encoding/
-│   │   └── encoder.py            # Codificación a tensores enteros y one-hot
+│   │   └── encoder.py            # Codificación a tensores enteros y one-hot (+ encode_stream)
 │   ├── qc/
 │   │   └── quality.py            # GC content, composición, calidad y filtrado
 │   ├── kmer/
-│   │   └── kmers.py              # Conteo de k-mers y espectro en GPU
+│   │   └── kmers.py              # Conteo de k-mers en GPU (+ streaming count_stream/count_fasta)
 │   ├── variants/
 │   │   └── caller.py             # Pileup y llamada de variantes en GPU
 │   ├── quantitative/
@@ -56,6 +60,7 @@ Genoly-GPU/
 │   └── alignment/
 │       ├── alignment.py          # Clase principal GPUSequenceAligner
 │       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
+├── docs/                           # arquitectura y documentación de producto
 ├── examples/
 │   ├── pipeline_completo.py      # Pipeline completo: I/O -> QC -> k-mers -> variantes
 │   ├── examp1.py                 # Ejemplo de uso del alineador
@@ -63,11 +68,14 @@ Genoly-GPU/
 │   ├── analisis2.py              # Sitios de restricción y motivos consenso
 │   └── seqdump.txt               # Isoformas del gen BRCA1 (ejemplo)
 ├── tests/
-│   └── test_smoke.py             # Tests de humo de todos los módulos
+│   ├── test_smoke.py             # Tests de humo de todos los módulos
+│   └── test_streaming.py         # Tests del pipeline de streaming (RAM/VRAM acotadas)
 ├── ui/
 │   ├── backend/                  # API REST FastAPI
 │   │   ├── main.py
-│   │   └── routers/              # device, qc, kmer, variants, quantitative, gblup, upload
+│   │   ├── jobs.py               # Trabajos de fondo con progreso en tiempo real
+│   │   ├── uploads.py            # Gestión de archivos subidos
+│   │   └── routers/              # device, qc, kmer, variants, quantitative, gblup, upload, jobs
 │   └── frontend/                 # UI React + Vite + Tailwind
 │       └── src/                  # páginas y componentes
 ├── fetchingfasta.py              # Descarga de FASTA desde NCBI por accession
@@ -94,17 +102,43 @@ Genoly-GPU incluye una interfaz web moderna construida con **React + Vite + Tail
 | `/quantitative` | Genética cuantitativa: LMM (REML/ML) y valores de cría BLUP. |
 | `/gblup` | Predicción genómica GBLUP con fiabilidad y precisión por individuo. |
 
+Además, los análisis de larga duración sobre archivos subidos se ejecutan como **trabajos de fondo con progreso en tiempo real**:
+
+| Endpoint | Funcionalidad |
+|---|---|
+| `POST /api/kmer/count-async` | Encola el conteo de k-mers y devuelve un `job_id`. |
+| `GET /api/jobs/{id}` | Estado y resultado del trabajo (JSON, para polling). |
+| `GET /api/jobs/{id}/events` | Progreso en tiempo real vía **Server-Sent Events** (registros/bases leídas, micro-lotes GPU). |
+
 ### Puesta en marcha
 
-Requisitos: Node.js 18+ y las dependencias de Python (ver arriba).
+Requisitos: **Node.js 20.19+ (se recomienda la 22 LTS)** para la UI y
+**Python 3.8+** con las dependencias del proyecto para el backend.
+Comprueba las versiones antes de empezar (`node -v` y `python --version`).
+
+> [!WARNING]
+> Con Node.js 18 (o 20 anterior a 20.19) `npm install` y `npm run dev`
+> fallan con
+> `SyntaxError: The requested module "node:util" does not provide an export named styleText`:
+> la UI usa Vite 8, que exige Node 20.19+/22.12+. Actualiza Node
+> (nvm-windows/nvm o instalador oficial) y vuelve a ejecutar `npm install`.
 
 ```bash
-# 1. Backend (FastAPI + uvicorn)
-pip install -r ui/backend/requirements.txt
+# 1. Backend (FastAPI + uvicorn) — entorno virtual recomendado
+python -m venv .venv
+.venv\Scripts\Activate.ps1              # Windows PowerShell
+# source .venv/bin/activate             # Linux/macOS
+# instala las dependencias de Genoly (torch, numpy, ...) Y las de la API
+pip install -r requirements.txt -r ui/backend/requirements.txt
 python -m uvicorn ui.backend.main:app --host 0.0.0.0 --port 8000
 # Documentación de la API: http://localhost:8000/docs
 
-# 2. Frontend (dev con hot-reload)
+# 1b. Alternativa desde ui/backend (con su propio .venv)
+#     el bootstrap de main.py añade la raíz al sys.path automáticamente
+cd ui/backend
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 2. Frontend (dev con hot-reload) — Node.js 20.19+/22 LTS
 cd ui/frontend
 npm install
 npm run dev        # http://localhost:5173
@@ -114,12 +148,16 @@ npm run build      # genera ui/frontend/dist
 # el backend sirve el frontend compilado en http://localhost:8000
 ```
 
+> [!IMPORTANT]
+> **No uses `--workers` mayor que 1.** El estado de los trabajos de fondo y sus streams de progreso SSE viven en la memoria del proceso: con varios workers, el `POST` que crea el trabajo podría aterrizar en un proceso y el `GET` de eventos en otro (404). Además, cada proceso ejecutaría análisis GPU en paralelo compitiendo por la misma VRAM, anulando el micro-batching adaptativo. La concurrencia ya se gestiona dentro del proceso (los trabajos GPU se serializan y las peticiones HTTP no bloquean el event loop); ajusta el paralelismo con la variable de entorno `GENOLY_MAX_WORKERS` si lo necesitas.
+
 > [!TIP]
 > Durante desarrollo, Vite redirige `/api/*` a `http://127.0.0.1:8000` automáticamente, así que no necesitas configurar CORS manualmente.
 
 ## Requisitos
 
 - Python 3.8 o superior.
+- Node.js 20.19 o superior (solo para la interfaz web: `npm install`/`npm run build`; se recomienda la 22 LTS).
 - NVIDIA GPU con drivers CUDA (recomendado, no obligatorio).
 - Dependencias:
 
@@ -283,6 +321,60 @@ deploy:
 > [!NOTE]
 > En Docker Desktop con WSL2, si la distro ya tiene configurado el toolkit, la GPU puede estar disponible incluso sin el bloque `deploy`. Comprueba con `curl http://localhost:8000/api/device` (campo `cuda_available`).
 
+## Pipeline de streaming (archivos multi-GB)
+
+Para genomas completos y datos crudos de varios GB, Genoly-GPU procesa bajo demanda con RAM y VRAM acotadas sea cual sea el tamaño de la fuente:
+
+```
+FASTA en disco ──bloques 64 KiB──> registros/ventanas ──> LOTE DE RAM (batch_size)
+                                                                       │
+                                              VRAMManager.plan_micro_batches()
+                                                                       │
+                                                            MICRO-LOTE GPU (n * L_max * b <= presupuesto)
+                                                                       │
+                                              gc.collect() + torch.cuda.empty_cache()
+```
+
+- **Archivo → RAM**: `FastaReader` lee por bloques de disco (64 KiB) y reconstruye los registros sin cargar el archivo. `iter_batches(batch_size)` agrupa registros (RAM batching); `iter_windows(w, overlap)` y `iter_windows_codes(w, overlap)` emiten ventanas (texto o códigos uint8 vectorizados) sin materializar ni siquiera un registro; `scan_stats` cuenta registros/bases vectorizadamente.
+- **RAM → VRAM**: `VRAMManager` divide cada lote en micro-lotes que caben en una fracción segura (25 % por defecto) de la VRAM libre, y tras cada micro-lote libera memoria (`gc.collect()` + `torch.cuda.empty_cache()`).
+- **Agregación**: en genomas reales casi todos los k-mers son únicos y el resultado exacto puede pesar varios GB. `count_fasta_aggregated` reparte los conteos en 256 particiones por bits bajos, derrama a `.npy` y deduplica partición a partición en la GPU: resultado **exacto** con pico de RAM `O(total_únicos / 256)` — nunca materializa la lista completa de k-mers.
+
+Los detalles de implementación (aritmética int32 de dos palabras, coste por base por etapa, límites matemáticos del planificador) están documentados en los docstrings de `Genoly/core/vram.py` y `Genoly/kmer/kmers.py`.
+
+### Uso programático
+
+```python
+from Genoly import KmerCounter, FastaReader
+
+kc = KmerCounter()
+
+# Archivo FASTA de cualquier tamaño: RAM ~ lote de ventanas, VRAM ~ presupuesto
+values, counts = kc.count_fasta("genoma_completo.fasta", k=31, canonical=True)
+
+# Genomas completos con millones de k-mers únicos: estadísticas exactas
+# (total, espectro, top-k) con RAM acotada por derrame a disco
+resumen = kc.count_fasta_aggregated("cromosoma.fasta", k=21, canonical=True, top=25)
+print(resumen["total_unique"], resumen["total_kmers"], resumen["top_kmers"][0])
+
+# Iterable perezoso de secuencias (streaming manual)
+values, counts = kc.count_stream(FastaReader("datos.fasta").iter_sequences(), k=21)
+
+# Registros con progreso (registros y bases leídos)
+values, counts = kc.count_records(
+    FastaReader("datos.fasta").records(), k=21,
+    on_progress=lambda info: print(info))
+# -> {"stage": "kmer", "records": 120, "bases": 9600, "units_done": ...,
+#     "bases_done": 9600, "micro_batches": 7, "window_size": 1048576}
+
+# Codificación en streaming con micro-lotes adaptativos
+from Genoly import SequenceEncoder
+enc = SequenceEncoder()
+for chunk in enc.encode_stream(FastaReader("datos.fasta").iter_batches(10_000)):
+    ...  # chunk.tensor en GPU, chunk.lengths, chunk.indices
+```
+
+Los conteos del pipeline de streaming son **idénticos** a los de `count()` (verificado en `tests/test_streaming.py`), incluido el modo canónico y k=31.
+
 ## Uso rápido
 
 ```python
@@ -365,6 +457,8 @@ python tests/test_smoke.py
 python -m pytest tests -v
 ```
 
+Los tests de `tests/test_streaming.py` verifican la equivalencia exacta entre el pipeline de streaming y el conteo en memoria, la matemática del planificador de VRAM y el ventanado con solape `k-1`.
+
 ## Clases principales
 
 ### GpuSetup
@@ -393,6 +487,21 @@ Gestión del dispositivo de cómputo (CUDA/NVIDIA o CPU). Centraliza la auto-det
 | `synchronize()` | Sincroniza CUDA (para mediciones de tiempo). |
 | `empty_cache()` | Libera memoria caché de CUDA. |
 
+### VRAMManager
+
+Gestión dinámica de VRAM: presupuesto por micro-lote, planificación adaptativa y liberación de memoria. En CPU usa la RAM libre del sistema como presupuesto. Ver [Pipeline de streaming](#pipeline-de-streaming-archivos-multi-gb) para los límites matemáticos.
+
+| Método | Descripción |
+|---|---|
+| `free_bytes()` | Memoria libre del dispositivo (`torch.cuda.mem_get_info()` o RAM del sistema). |
+| `budget_bytes()` | Presupuesto por micro-lote: `libre * safety_fraction` (por defecto 25 %). |
+| `plan_micro_batches(lengths, bytes_per_base)` | Divide longitudes en grupos de índices que caben en el presupuesto. |
+| `suggest_window_bases(bytes_per_base)` | Tamaño de ventana sugerido (objetivo 128 MiB, potencia de 2). |
+| `release()` | Fuerza `gc.collect()` + `torch.cuda.empty_cache()`. |
+| `stats()` | Instantánea de memoria para telemetría/logs. |
+
+Las funciones `estimate_kmer_bytes_per_base(k, canonical)` y `estimate_encode_bytes_per_base(num_classes, one_hot)` calculan el coste `b` (bytes/base) de cada etapa para alimentar el planificador.
+
 ### SequenceEncoder
 
 Codifica secuencias de ADN/ARN a tensores listos para GPU.
@@ -401,6 +510,7 @@ Codifica secuencias de ADN/ARN a tensores listos para GPU.
 |---|---|
 | `encode(sequences)` | Codifica un lote a tensor entero (B, L) + longitudes. |
 | `encode_one_hot(sequences)` | Codifica un lote a one-hot (B, L, C). |
+| `encode_stream(batches, one_hot)` | Micro-lotes adaptativos de GPU según la VRAM libre; libera memoria tras cada lote. |
 | `decode(tensor, lengths)` | Convierte índices de vuelta a secuencias de texto. |
 
 ### QualityAnalyzer
@@ -423,6 +533,10 @@ Conteo de k-mers acelerado por GPU (codificación base-4 entera en int64, exacta
 | Método | Descripción |
 |---|---|
 | `count(sequences, k, canonical)` | Frecuencia de cada k-mer (canónico opcional). |
+| `count_stream(sequences, k, ...)` | Conteo en streaming sobre un iterable perezoso, con RAM/VRAM acotadas. |
+| `count_records(records, k, ...)` | Streaming sobre registros FASTA con progreso de la fuente. |
+| `count_fasta(path, k, ...)` | Streaming directo del archivo (ventanas desde bloques de disco, sin materializar registros). |
+| `count_fasta_aggregated(path, k, ...)` | Estadísticas exactas (total, espectro, top-k) con acumulador particionado y derrame a disco: procesa genomas completos en máquinas modestas. |
 | `decode_kmer(code, k)` | Convierte un código entero a secuencia de texto. |
 | `spectrum(sequences, k)` | Distribución de k-mers por multiplicidad. |
 | `estimate_genome_size(sequences, k)` | Estimación de tamaño de genoma (Lander-Waterman). |
@@ -582,9 +696,9 @@ python descargar_datos_test.py
 - [x] Carga de tablas CSV/Excel con limpieza e imputación de valores perdidos.
 - [x] Auto-detección de la GPU e instalación automática de PyTorch CUDA.
 - [x] Despliegue en contenedor Docker (API + frontend, CUDA opcional).
+- [x] Pipeline de streaming para datasets masivos: chunking de disco, RAM batching, micro-batching adaptativo de VRAM y progreso en tiempo real (SSE).
 - [ ] Soporte real de paralelización por lotes en GPU para el alineador.
 - [ ] Llamada de inserciones mediante CIGAR (lecturas alineadas).
-- [ ] Procesamiento en streaming para datasets masivos (chunks GPU).
 - [ ] Exportación a formatos estándar (SAM/BAM, VCF).
 
 ## Licencia
