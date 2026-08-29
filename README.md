@@ -4,6 +4,8 @@ Software de aceleración por tecnología de GPU (NVIDIA por ahora) para el anál
 
 Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O de FASTA/FASTQ, control de calidad, conteo de k-mers, alineamiento, codificación a tensores y llamada de variantes— todo acelerado por GPUs NVIDIA a través de PyTorch y CUDA.
 
+> 📚 **Documentación extendida**: [docs/que-es-genoly.md](docs/que-es-genoly.md) (qué es, necesidad y diferenciación) y [docs/arquitectura.md](docs/arquitectura.md) (arquitectura técnica y decisiones de diseño).
+
 ## Caracteristicas
 
 - **Pipeline de streaming para archivos multi-GB**: lectura por bloques de disco (64 KiB), RAM batching de registros, micro-lotes adaptativos de GPU según la VRAM libre y liberación de memoria tras cada micro-lote. Procesa genomas completos sin OOM (ver [Pipeline de streaming](#pipeline-de-streaming-archivos-multi-gb)).
@@ -58,6 +60,7 @@ Genoly-GPU/
 │   └── alignment/
 │       ├── alignment.py          # Clase principal GPUSequenceAligner
 │       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
+├── docs/                           # arquitectura y documentación de producto
 ├── examples/
 │   ├── pipeline_completo.py      # Pipeline completo: I/O -> QC -> k-mers -> variantes
 │   ├── examp1.py                 # Ejemplo de uso del alineador
