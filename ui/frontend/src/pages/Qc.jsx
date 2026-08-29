@@ -103,7 +103,10 @@ export default function Qc() {
                 <FileRow label="Registros" value={upload.recordCount} />
                 <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
               </dl>
-              <button className="btn-ghost mt-3 w-full" onClick={() => setUpload(null)}>
+              <button className="btn-primary mt-3 w-full" onClick={analyze} disabled={loading}>
+                {loading ? 'Analizando…' : 'Analizar'}
+              </button>
+              <button className="btn-ghost mt-2 w-full" onClick={() => setUpload(null)}>
                 Usar texto manual
               </button>
             </Card>

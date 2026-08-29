@@ -37,6 +37,39 @@ export const api = {
   countKmers: (payload) =>
     request('/kmer/count', { method: 'POST', body: JSON.stringify(payload) }),
 
+  countKmersAsync: (payload) =>
+    request('/kmer/count-async', { method: 'POST', body: JSON.stringify(payload) }),
+
+  jobStatus: (jobId) => request(`/jobs/${jobId}`),
+
+  // Suscripción SSE al progreso de un trabajo. Resuelve con el resultado
+  // en el evento 'done' y rechaza con el detalle en 'error'.
+  jobEvents: (jobId, { onProgress, onStart } = {}) =>
+    new Promise((resolve, reject) => {
+      const es = new EventSource(`${BASE}/jobs/${jobId}/events`)
+      es.onmessage = (e) => {
+        let data
+        try {
+          data = JSON.parse(e.data)
+        } catch {
+          return
+        }
+        if (data.type === 'progress') onProgress?.(data)
+        else if (data.type === 'start') onStart?.(data)
+        else if (data.type === 'done') {
+          es.close()
+          resolve(data.result)
+        } else if (data.type === 'error') {
+          es.close()
+          reject(new Error(data.detail || 'El trabajo falló'))
+        }
+      }
+      es.onerror = () => {
+        es.close()
+        reject(new Error('Conexión de progreso interrumpida'))
+      }
+    }),
+
   callVariants: (payload) =>
     request('/variants/call', { method: 'POST', body: JSON.stringify(payload) }),
 

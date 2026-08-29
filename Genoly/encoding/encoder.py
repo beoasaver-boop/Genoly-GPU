@@ -1,14 +1,33 @@
 import numpy as np
 import torch
-from typing import List, Optional, Tuple, Dict
+from dataclasses import dataclass
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 from Genoly.core.device import DeviceManager, get_device
+from Genoly.core.vram import VRAMManager
 
 # Alfabeto canónico para cómputo núcleo
 CANONICAL = ['A', 'C', 'G', 'T', 'N']
 
 # Alfabeto IUPAC completo
 IUPAC = ['A', 'C', 'G', 'T', 'N', 'R', 'Y', 'S', 'W', 'K', 'M', 'B', 'D', 'H', 'V']
+
+
+@dataclass
+class EncodedBatch:
+    """
+    Micro-lote codificado producido por :meth:`SequenceEncoder.encode_stream`.
+
+    Attributes:
+        tensor: Tensor en el dispositivo: (n, L_max) int64 o
+            (n, L_max, C) float32 si es one-hot.
+        lengths: Longitud real de cada secuencia (sin padding).
+        indices: Posición de cada secuencia dentro del lote de RAM
+            original (para restaurar el orden si se reordena).
+    """
+    tensor: torch.Tensor
+    lengths: List[int]
+    indices: List[int]
 
 
 class SequenceEncoder:
@@ -115,6 +134,81 @@ class SequenceEncoder:
 
         lengths_tensor = torch.tensor(lengths, dtype=torch.long, device=self.device)
         return encoded, lengths_tensor
+
+    # ------------------------------------------------------------------ #
+    # Streaming con gestión dinámica de VRAM
+    # ------------------------------------------------------------------ #
+    def bytes_per_base(self, one_hot: bool = False) -> int:
+        """
+        Coste estimado en bytes por base del tensor codificado (peor caso).
+
+        Documentación del cálculo:
+
+        - Entera: destino (B, L) int64 (8 B/base) + transitorios de la
+          tabla ASCII y de la copia CPU→GPU (16 B/base) => 24 B/base.
+        - One-hot: intermedio int64 (8 B/base) + destino (B, L, C)
+          float32 (C*4 B/base) + transitorios de máscara y scatter
+          (2*C*4 B/base) => 8 + 3*C*4 (68 B/base con C=5).
+
+        Ver ``Genoly.core.vram`` para el modelo completo.
+        """
+        if one_hot:
+            # encode_one_hot genera siempre las 5 clases canónicas
+            # (A/C/G/T/N), no el alfabeto IUPAC completo
+            return 8 + 3 * 5 * 4
+        return 24
+
+    def encode_stream(self,
+                      batches: Iterable[List[str]],
+                      one_hot: bool = False,
+                      vram: Optional[VRAMManager] = None
+                      ) -> Iterator[EncodedBatch]:
+        """
+        Convierte lotes de RAM en micro-lotes adaptativos de GPU.
+
+        Cada lote de RAM (lista de secuencias) se divide con
+        ``VRAMManager.plan_micro_batches`` de modo que el tensor
+        resultante quepa en una fracción segura de la VRAM libre:
+
+            bytes(micro-lote) = n * L_max * bytes_per_base <= presupuesto
+
+        Tras ceder cada micro-lote se fuerza la recolección de basura y
+        el vaciado de la caché de CUDA (si ``VRAMManager.release_after_each``),
+        devolviendo la memoria al driver y evitando fragmentación.
+
+        Args:
+            batches: Iterables de lotes de RAM (listas de secuencias),
+                p. ej. ``[[s1, s2, ...], [s3, ...]]``.
+            one_hot: Si True, codifica one-hot (B, L, C) float32.
+            vram: Gestor de VRAM; por defecto se crea uno sobre el
+                dispositivo del encoder.
+
+        Yields:
+            :class:`EncodedBatch` con el tensor en el dispositivo.
+        """
+        manager = vram if vram is not None else VRAMManager(self.device)
+        cost = self.bytes_per_base(one_hot)
+
+        for batch in batches:
+            if not batch:
+                continue
+            lengths = [len(s) for s in batch]
+            for group in manager.plan_micro_batches(lengths, cost):
+                seqs = [batch[i] for i in group]
+                if one_hot:
+                    tensor = self.encode_one_hot(seqs)
+                    chunk_lengths = [lengths[i] for i in group]
+                else:
+                    tensor, lengths_tensor = self.encode(seqs)
+                    chunk_lengths = [int(v) for v in lengths_tensor.cpu().tolist()]
+                yield EncodedBatch(
+                    tensor=tensor,
+                    lengths=chunk_lengths,
+                    indices=list(group),
+                )
+                del tensor
+                if manager.release_after_each:
+                    manager.release()
 
     # ------------------------------------------------------------------ #
     # Codificación one-hot

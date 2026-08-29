@@ -3,10 +3,26 @@ Genoly-GPU UI: API REST del backend.
 
 Sirve los módulos de Genoly (GPU/CUDA) a través de FastAPI y, en
 producción, el frontend React compilado (ui/frontend/dist).
+
+Arranque (desde cualquier directorio, incluido ui/backend):
+    uvicorn main:app --host 0.0.0.0 --port 8000
+o desde la raíz del proyecto:
+    python -m uvicorn ui.backend.main:app --host 0.0.0.0 --port 8000
+
+Nota: usar --workers 1 (por defecto). El estado de los trabajos de fondo
+y sus streams SSE vive en memoria del proceso, y los trabajos GPU ya se
+serializan internamente; varios procesos competirían por la misma VRAM.
 """
 
+import sys
 from pathlib import Path
-from typing import Optional
+
+# Bootstrap de imports: añade la raíz del proyecto a sys.path para que
+# `Genoly` y `ui.backend.*` resuelvan aunque uvicorn se ejecute desde
+# ui/backend (o desde otro directorio de trabajo).
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from Genoly import __version__
 from Genoly.core.gpu_setup import GpuSetup
 
-from ui.backend.routers import device, qc, kmer, variants, upload, quantitative, gblup
+from ui.backend.routers import device, qc, kmer, variants, upload, quantitative, gblup, jobs
 
 app = FastAPI(
     title="Genoly-GPU API",
@@ -38,6 +54,7 @@ app.include_router(variants.router)
 app.include_router(quantitative.router)
 app.include_router(gblup.router)
 app.include_router(upload.router)
+app.include_router(jobs.router)
 
 
 @app.get("/api/health")

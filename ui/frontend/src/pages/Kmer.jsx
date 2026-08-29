@@ -33,29 +33,57 @@ export default function Kmer() {
   const [canonical, setCanonical] = useState(true)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [progress, setProgress] = useState(null)
   const [error, setError] = useState(null)
 
   const run = async () => {
     setLoading(true)
     setError(null)
+    setProgress(null)
     try {
-      let payload
       if (upload) {
-        payload = { upload_id: upload.uploadId, k, canonical, min_abundance: 1, top: 25 }
-      } else {
-        const seqs = sequences
-          .split('\n')
-          .map((s) => s.trim().toUpperCase())
-          .filter((s) => s.length > 0)
-        if (!seqs.length) throw new Error('Introduce al menos una secuencia')
-        payload = { sequences: seqs, k, canonical, min_abundance: 1, top: 25 }
+        const payload = {
+          upload_id: upload.uploadId,
+          k,
+          canonical,
+          min_abundance: 1,
+          top: 25,
+        }
+        let job = null
+        try {
+          job = await api.countKmersAsync(payload)
+        } catch {
+          job = null // backend sin trabajos: fallback síncrono
+        }
+        if (job) {
+          const res = await api.jobEvents(job.job_id, {
+            onProgress: (p) => setProgress(p),
+          })
+          setResult(res)
+        } else {
+          setResult(await api.countKmers(payload))
+        }
+        return
       }
-      const res = await api.countKmers(payload)
+
+      const seqs = sequences
+        .split('\n')
+        .map((s) => s.trim().toUpperCase())
+        .filter((s) => s.length > 0)
+      if (!seqs.length) throw new Error('Introduce al menos una secuencia')
+      const res = await api.countKmers({
+        sequences: seqs,
+        k,
+        canonical,
+        min_abundance: 1,
+        top: 25,
+      })
       setResult(res)
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
+      setProgress(null)
     }
   }
 
@@ -139,6 +167,48 @@ export default function Kmer() {
               {loading ? 'Contando…' : 'Contar k-mers'}
             </button>
           </Card>
+
+          {loading && progress && (
+            <Card title="Progreso" subtitle="Streaming por bloques y micro-lotes GPU">
+              {progress.total_bases > 0 && (
+                <>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-panel-2">
+                    <div
+                      className="h-full rounded-t bg-gradient-to-r from-accent-soft to-accent shadow-glow transition-all"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (progress.bases_done / progress.total_bases) * 100,
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-ink-faint">
+                    {progress.bases_done.toLocaleString()} /{' '}
+                    {progress.total_bases.toLocaleString()} bases en GPU
+                  </p>
+                </>
+              )}
+              <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <dt className="text-ink-faint">Registros</dt>
+                  <dd className="font-mono">{progress.total_records ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-ink-faint">Micro-lotes GPU</dt>
+                  <dd className="font-mono">{progress.micro_batches ?? '—'}</dd>
+                </div>
+                {progress.window_size > 0 && (
+                  <div>
+                    <dt className="text-ink-faint">Ventana</dt>
+                    <dd className="font-mono">
+                      {progress.window_size.toLocaleString()} pb
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </Card>
+          )}
 
           {result && (
             <div className="grid grid-cols-2 gap-4">

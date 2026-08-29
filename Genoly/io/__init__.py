@@ -1,6 +1,8 @@
 from Genoly.io.fasta import (
     FastaRecord,
     FastaReader,
+    FastaStats,
+    iter_fasta_batches,
     read_fasta,
     write_fasta,
     fasta_to_batches,
@@ -16,6 +18,8 @@ from Genoly.io.fastq import (
 __all__ = [
     'FastaRecord',
     'FastaReader',
+    'FastaStats',
+    'iter_fasta_batches',
     'read_fasta',
     'write_fasta',
     'fasta_to_batches',
