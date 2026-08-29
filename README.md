@@ -306,10 +306,10 @@ deploy:
 
 ## Pipeline de streaming (archivos multi-GB)
 
-Para genomas completos y datos crudos de varios GB, Genoly-GPU procesa bajo demanda en tres niveles, con RAM y VRAM acotadas sea cual sea el tamaño de la fuente:
+Para genomas completos y datos crudos de varios GB, Genoly-GPU procesa bajo demanda con RAM y VRAM acotadas sea cual sea el tamaño de la fuente:
 
 ```
-FASTA en disco ──bloques 64 KiB──> líneas ──registros/ventanas──> LOTE DE RAM (batch_size)
+FASTA en disco ──bloques 64 KiB──> registros/ventanas ──> LOTE DE RAM (batch_size)
                                                                        │
                                               VRAMManager.plan_micro_batches()
                                                                        │
@@ -318,46 +318,26 @@ FASTA en disco ──bloques 64 KiB──> líneas ──registros/ventanas─�
                                               gc.collect() + torch.cuda.empty_cache()
 ```
 
-1. **Archivo → RAM (streaming y chunking)**: `FastaReader` lee el archivo en bloques de disco (64 KiB) y reconstruye los registros línea a línea, sin cargar el archivo completo. Las líneas más largas que 1 MiB (FASTA sin ajustar) se fragmentan. `iter_batches(batch_size)` agrupa un número fijo de registros (RAM batching) antes de pasarlos a la siguiente etapa, `iter_windows(w, overlap)` emite ventanas de bases sin materializar ni siquiera un registro y `iter_windows_codes(w, overlap)` hace lo mismo **directamente sobre los bytes del disco** (tabla de 256 bytes + numpy, sin cadenas de Python ni decodificación de texto). `scan_stats` usa la misma técnica vectorizada para contar registros y bases.
-2. **RAM → VRAM (micro-batching adaptativo)**: `VRAMManager` mide la memoria libre con `torch.cuda.mem_get_info()`, calcula el peso en bytes del tensor resultante y divide cada lote de RAM en micro-lotes que caben en una fracción segura (25 % por defecto) de la VRAM libre. Tras cada micro-lote se fuerza `gc.collect()` y `torch.cuda.empty_cache()` para devolver la memoria al driver y evitar fragmentación.
-3. **Aritmética int32 de dos palabras**: los códigos de k-mer se construyen con Horner en int32 (tasa plena en GPU; int64 mueve el doble de bytes y rinde ~2x peor): una palabra para k ≤ 15, dos (`lo` + `hi`) para 16 ≤ k ≤ 30, e int64 solo para k = 31. El código global se combina a int64 una única vez por micro-lote, justo antes del `torch.unique`.
-4. **Transferencia uint8 + padding semántico**: en la ruta numérica, cada micro-lote sube a la GPU como uint8 (8x menos bytes de H2D que int64) y el padding de colas usa el código 255 (inválido), de modo que la máscara de validez también cubre la semántica "ventana dentro del registro".
-5. **Agregación (acumulador particionado + dedup en GPU)**: en genomas reales casi todos los k-mers son únicos y el resultado exacto puede pesar varios GB (cromosoma 1 humano, k=21: ~190M únicos × 12 B ≈ 2,3 GB). `count_fasta_aggregated` reparte los conteos parciales en 256 particiones por bits bajos del código, derrama cada partición a `.npy` al superar el buffer y deduplica partición a partición **en la GPU** (`torch.unique` + `index_add_` sobre trozos de ≤ 32M filas): el resultado es **exacto**, el pico de RAM es `O(total_únicos / 256)` y el de VRAM `O(32M × 44 B)` — nunca materializa el resultado completo.
+- **Archivo → RAM**: `FastaReader` lee por bloques de disco (64 KiB) y reconstruye los registros sin cargar el archivo. `iter_batches(batch_size)` agrupa registros (RAM batching); `iter_windows(w, overlap)` y `iter_windows_codes(w, overlap)` emiten ventanas (texto o códigos uint8 vectorizados) sin materializar ni siquiera un registro; `scan_stats` cuenta registros/bases vectorizadamente.
+- **RAM → VRAM**: `VRAMManager` divide cada lote en micro-lotes que caben en una fracción segura (25 % por defecto) de la VRAM libre, y tras cada micro-lote libera memoria (`gc.collect()` + `torch.cuda.empty_cache()`).
+- **Agregación**: en genomas reales casi todos los k-mers son únicos y el resultado exacto puede pesar varios GB. `count_fasta_aggregated` reparte los conteos en 256 particiones por bits bajos, derrama a `.npy` y deduplica partición a partición en la GPU: resultado **exacto** con pico de RAM `O(total_únicos / 256)` — nunca materializa la lista completa de k-mers.
 
-### Límites matemáticos del cálculo de VRAM
-
-Para un micro-lote de `n` secuencias con longitud máxima de padding `L` y un coste `b` bytes por base:
-
-```
-bytes(micro-lote) = n * L * b   <=   presupuesto = memoria_libre * fraccion_seguridad
-```
-
-El planificador cierra cada micro-lote en cuanto `(n+1) * max(L_1..L_{n+1}) * b > presupuesto`. Costes por base `b` documentados (int64 = 8 B, bool = 1 B, con margen para los transitorios de `torch.unique` y `scatter`):
-
-| Etapa | Coste (b) |
-|---|---|
-| Codificación entera | 24 B/base |
-| Codificación one-hot (C=5, float32) | 68 B/base |
-| Conteo de k-mers directo | 57 B/base |
-| Conteo de k-mers canónico (k=31) | 89 B/base |
-
-Las secuencias individuales que excedan el presupuesto viajan solas en su micro-lote; por eso el conteo de k-mers sobre archivos usa ventanas de tamaño sugerido por `VRAMManager.suggest_window_bases()` (objetivo 128 MiB, potencia de 2, acotada a [64 kpb, 8 Mpb]) con solape de `k-1` bases: la cobertura de k-mers es idéntica a procesar la secuencia entera.
+Los detalles de implementación (aritmética int32 de dos palabras, coste por base por etapa, límites matemáticos del planificador) están documentados en los docstrings de `Genoly/core/vram.py` y `Genoly/kmer/kmers.py`.
 
 ### Uso programático
 
 ```python
-from Genoly import KmerCounter, FastaReader, VRAMManager
+from Genoly import KmerCounter, FastaReader
 
 kc = KmerCounter()
 
 # Archivo FASTA de cualquier tamaño: RAM ~ lote de ventanas, VRAM ~ presupuesto
 values, counts = kc.count_fasta("genoma_completo.fasta", k=31, canonical=True)
 
-# Genomas completos con millones de k-mers unicos: estadisticas exactas
+# Genomas completos con millones de k-mers únicos: estadísticas exactas
 # (total, espectro, top-k) con RAM acotada por derrame a disco
 resumen = kc.count_fasta_aggregated("cromosoma.fasta", k=21, canonical=True, top=25)
 print(resumen["total_unique"], resumen["total_kmers"], resumen["top_kmers"][0])
-# -> RAM pico ~ resultado/256; nunca materializa la lista completa de k-mers
 
 # Iterable perezoso de secuencias (streaming manual)
 values, counts = kc.count_stream(FastaReader("datos.fasta").iter_sequences(), k=21)
