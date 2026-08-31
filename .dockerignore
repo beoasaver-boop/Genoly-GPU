@@ -1,0 +1,42 @@
+# Git y contexto local
+.git
+.gitignore
+context/
+comando.txt
+contexto.md
+
+# Entornos y caches de Python
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+
+# Datos genomicos grandes (no viajan en la imagen)
+datos_reales/
+*.fasta
+*.fastq
+*.fastq.gz
+*.fa.gz
+*.fna.gz
+*.bam
+*.bai
+*.vcf
+*.vcf.gz
+*.bcf
+*.sam
+pantera
+
+# Dependencias y artefactos de la UI (npm ci los regenera en el build)
+ui/frontend/node_modules/
+ui/frontend/dist/
+node_modules/
+
+# Contenido no necesario para la imagen
+docker/
+tests/
+examples/
+*.log
+.vscode/
+.idea/

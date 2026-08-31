@@ -74,8 +74,10 @@ class GpuSetup:
             return NvidiaSystemInfo(available=False,
                                     error="nvidia-smi no disponible o sin GPU NVIDIA")
 
-        driver = re.search(r"Driver Version:\s*([\d.]+)", output)
-        cuda = re.search(r"CUDA Version:\s*([\d.]+)", output)
+        # Formato antiguo: "Driver Version: 591.59 | CUDA Version: 13.1"
+        # Formato nuevo (driver 610+): "KMD Version: 610.57.04 | CUDA UMD Version: 13.3"
+        driver = re.search(r"(?:Driver|KMD)\s+Version:\s*([\d.]+)", output)
+        cuda = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*([\d.]+)", output)
         gpu = re.search(r"NVIDIA\s+([A-Za-z0-9 \-]+)", output)
         memory = re.search(r"([\d]+)MiB\s*/\s*([\d]+)MiB", output)
 

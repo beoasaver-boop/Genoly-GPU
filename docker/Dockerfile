@@ -60,13 +60,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 CMD uvicorn ui.backend.main:app --host 0.0.0.0 --port $GENOLY_PORT
 
 # --- Rama GPU (con CUDA 12.6) ---
-FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04 AS backend-gpu
+# Ubuntu 24.04: su repositorio incluye python3.12 (en 22.04 no existe y el build falla)
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04 AS backend-gpu
 
 ARG GENOLY_PORT=8000
 ENV GENOLY_PORT=$GENOLY_PORT \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     GENOLY_DEVICE=cuda \
     TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" \
     CUDA_LAUNCH_BLOCKING=0

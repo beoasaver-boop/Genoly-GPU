@@ -3,18 +3,23 @@
 
 set -e
 
-DETECT_GPU_PY="$(dirname "$0")/detect_gpu.py"
+DIR_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
+DETECT_GPU_PY="$DIR_SCRIPT/detect_gpu.py"
+cd "$DIR_SCRIPT"
+
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+[ -n "$PYTHON_BIN" ] || { echo "ERROR: se necesita python3 en el PATH"; exit 1; }
 
 detect_gpu_mode() {
-    python "$DETECT_GPU_PY" --mode 2>/dev/null || echo "cpu"
+    "$PYTHON_BIN" "$DETECT_GPU_PY" --mode 2>/dev/null || echo "cpu"
 }
 
 list_gpus() {
-    python "$DETECT_GPU_PY" --list
+    "$PYTHON_BIN" "$DETECT_GPU_PY" --list
 }
 
 best_gpu() {
-    python "$DETECT_GPU_PY" --best 2>/dev/null || echo -1
+    "$PYTHON_BIN" "$DETECT_GPU_PY" --best 2>/dev/null || echo -1
 }
 
 show_help() {
@@ -62,7 +67,7 @@ launch() {
             MSG="GPU $gpu_id"
             ;;
         *)
-            echo "❌ Modo inválido: $mode"
+            echo "Modo invalido: $mode"
             return 1
             ;;
     esac
@@ -97,16 +102,16 @@ if [ -z "$MODE" ]; then
     MODE=$(detect_gpu_mode)
     echo "Modo recomendado: ${MODE^^}"
     
-    # Si hay GPUs, preguntar
-    if [ "$MODE" = "gpu" ]; then
+    # Si hay GPUs, preguntar (solo en terminal interactiva)
+    if [ "$MODE" = "gpu" ] && [ -t 0 ]; then
         list_gpus
         echo ""
         echo "Opciones:"
         echo "  [a] Usar TODAS las GPUs"
         echo "  [b] Usar la GPU con más VRAM libre (automático)"
-        read -p "  [c] Usar CPU"
+        echo "  [c] Usar CPU"
         echo ""
-        read -p "Selecciona (a/b/c): " choice
+        read -p "Selecciona (a/b/c): " choice || choice="a"
         
         case "$choice" in
             a|A) MODE="gpu" ;;

@@ -1,11 +1,10 @@
-```markdown
 # Genoly-GPU
 
 Software de aceleración por tecnología de GPU (NVIDIA por ahora) para el análisis de grandes datos del genoma.
 
 Genoly-GPU ofrece las herramientas de un pipeline de genómica estándar —I/O de FASTA/FASTQ, control de calidad, conteo de k-mers, alineamiento, codificación a tensores y llamada de variantes— todo acelerado por GPUs NVIDIA a través de PyTorch y CUDA.
 
-> 📚 **Documentación extendida**: [docs/que-es-genoly.md](docs/que-es-genoly.md) (qué es, necesidad y diferenciación) y [docs/arquitectura.md](docs/arquitectura.md) (arquitectura técnica y decisiones de diseño).
+> **Documentación extendida**: [docs/que-es-genoly.md](docs/que-es-genoly.md) (qué es, necesidad y diferenciación) y [docs/arquitectura.md](docs/arquitectura.md) (arquitectura técnica y decisiones de diseño).
 
 ## Caracteristicas
 
@@ -61,10 +60,14 @@ Genoly-GPU/
 │   └── alignment/
 │       ├── alignment.py          # Clase principal GPUSequenceAligner
 │       └── alignment_wExa.py     # Versión con analizador de mutaciones simplificado
-├── docker/                         # Scripts de lanzamiento y detección de GPU
+├── docker/                         # Despliegue en contenedor (API + frontend con CUDA)
+│   ├── Dockerfile                # Multi-stage: frontend Node + backend CPU/GPU condicional
+│   ├── docker-compose.yml        # Servicios genoly-cpu / genoly-gpu / gpu-select
 │   ├── detect_gpu.py             # Detector de GPU NVIDIA
-│   ├── launch.py                 # Lanzador inteligente (Python)
-│   └── launch.sh                 # Lanzador inteligente (bash)
+│   ├── launch.py                 # Lanzador simple (Python)
+│   ├── launch.sh                 # Lanzador simple (bash)
+│   ├── setup_docker.sh           # Montaje automático robusto del contenedor (Linux/macOS/WSL2)
+│   └── setup_docker.ps1          # Montaje automático robusto del contenedor (Windows)
 ├── docs/                           # arquitectura y documentación de producto
 ├── examples/
 │   ├── pipeline_completo.py      # Pipeline completo: I/O -> QC -> k-mers -> variantes
@@ -88,9 +91,7 @@ Genoly-GPU/
 ├── descargar_datos_test.py       # Descarga datos reales para pruebas (datos_reales/, ignorado)
 ├── setup_genoly.ps1              # Script de instalación para Windows
 ├── setup_genoly.sh               # Script de instalación para Linux/macOS/WSL2
-├── Dockerfile                    # Imagen multi-stage (frontend + API con CUDA)
-├── .dockerignore
-├── docker-compose.yml            # Orquesta el contenedor (GPU opcional)
+├── .dockerignore                 # Reduce el contexto de construcción de la imagen
 ├── requirements.txt
 └── README.md
 ```
@@ -370,7 +371,7 @@ print(info.gpu_name, info.driver_version, info.cuda_version)
 
 ## Docker
 
-Genoly-GPU incluye un `Dockerfile` (multi-stage), `.dockerignore` y `docker-compose.yml` para levantar la API y el frontend en un contenedor.
+Genoly-GPU incluye `docker/Dockerfile` (multi-stage), `docker/docker-compose.yml` y `.dockerignore` para levantar la API y el frontend en un contenedor. Los scripts `docker/setup_docker.sh` (Linux/macOS/WSL2) y `docker/setup_docker.ps1` (Windows) montan el contenedor de forma automática y robusta: con acceso a las GPUs NVIDIA del sistema y verificación final de CUDA dentro del contenedor.
 
 > [!TIP]
 > La imagen construye el frontend React en una primera etapa y en la segunda instala Python con PyTorch. Soporta dos modos de construcción: **CPU** (imagen ligera) y **GPU** (con CUDA 12.6).
@@ -380,16 +381,53 @@ Genoly-GPU incluye un `Dockerfile` (multi-stage), `.dockerignore` y `docker-comp
 | Modo | Imagen base | Tamaño aprox. | Uso |
 |------|-------------|---------------|-----|
 | CPU | `python:3.12-slim` | ~300 MB | Desarrollo, máquinas sin NVIDIA |
-| GPU | `nvidia/cuda:12.6.0-runtime` | ~2.5 GB | Producción con GPU NVIDIA |
+| GPU | `nvidia/cuda:12.6.0-runtime-ubuntu24.04` | ~2.5 GB | Producción con GPU NVIDIA |
 
 > [!NOTE]
 > El modo GPU requiere tener instalado el **nvidia-container-toolkit** en el host. Si no está disponible, el contenedor funcionará en CPU automáticamente.
 
-### Lanzamiento inteligente (recomendado)
+### Montaje automático robusto (recomendado)
 
-Genoly-GPU incluye un lanzador que detecta automáticamente las GPUs disponibles y selecciona el modo adecuado.
+Los scripts `docker/setup_docker.sh` (Linux/macOS/WSL2) y `docker/setup_docker.ps1` (Windows PowerShell) montan el contenedor completo en un solo paso: comprueban Docker, el demonio y los permisos; liberan el puerto y retiran contenedores anteriores; validan la GPU del host y el NVIDIA Container Toolkit (en Linux ofrecen instalarlo y configurarlo); comprueban el espacio en disco; construyen la imagen (con Compose o con `docker build` si no está disponible); lanzan el contenedor con `--gpus all`; y verifican al final que PyTorch ve la GPU y que la API responde dentro del contenedor. Cada error se detalla con la acción correctiva concreta.
 
-**Linux / macOS / WSL2:**
+| bash | PowerShell | Descripción |
+|---|---|---|
+| `--gpu` | `-Gpu` | Todas las GPUs (por defecto si hay NVIDIA) |
+| `--gpu-id N` | `-GpuId N` | Usar solo la GPU con índice N |
+| `--cpu` | `-Cpu` | Modo CPU (sin GPU) |
+| `--puerto N` | `-Puerto N` | Puerto del host y del contenedor (8000 por defecto) |
+| `--sin-cache` | `-SinCache` | Reconstruir la imagen sin usar caché |
+| `--solo-comprobar` | `-SoloComprobar` | Solo diagnóstico del entorno (no construye ni lanza) |
+| `--list` | `-Listar` | Listar las GPUs detectadas y salir |
+| `--ayuda` / `-h` | `-Ayuda` | Mostrar la ayuda |
+
+```bash
+# Linux/macOS/WSL2: GPU (todas las tarjetas)
+./docker/setup_docker.sh
+
+# Solo la GPU con índice 1, en el puerto 8010
+./docker/setup_docker.sh --gpu-id 1 --puerto 8010
+
+# Diagnóstico sin construir ni lanzar nada
+./docker/setup_docker.sh --solo-comprobar
+```
+
+```powershell
+# Windows (Docker Desktop con WSL2): GPU (todas las tarjetas)
+powershell -ExecutionPolicy Bypass -File .\docker\setup_docker.ps1
+
+# Solo la GPU con índice 1
+powershell -ExecutionPolicy Bypass -File .\docker\setup_docker.ps1 -GpuId 1
+```
+
+Las imágenes resultantes se llaman `genoly-gpu:cpu-latest` y `genoly-gpu:gpu-latest`; los contenedores, `genoly-gpu-cpu`, `genoly-gpu-gpu` y `genoly-gpu-gpu-N` (según el modo).
+
+> [!IMPORTANT]
+> Usar GPU en Docker requiere **nvidia-container-toolkit** en el host. En Linux, el propio script lo detecta y ofrece instalarlo y configurarlo (`nvidia-ctk runtime configure --runtime=docker`). En Windows, Docker Desktop con backend WSL2 lo gestiona: instala el driver NVIDIA en Windows, ejecuta `wsl --update` y reinicia Docker Desktop. Guía: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+
+### Lanzador simple (opcional)
+
+También existen lanzadores más sencillos (`docker/launch.sh` y `docker/launch.py`) que seleccionan el perfil de Compose según la GPU detectada, sin las comprobaciones ni la verificación del montaje robusto.
 
 ```bash
 # Lanzamiento interactivo (detecta GPU automáticamente)
@@ -414,58 +452,44 @@ python docker/launch.py --port 8080 --gpu
 python docker/launch.py --list
 ```
 
-**Windows (PowerShell):**
-
-```powershell
-# Lanzamiento interactivo
-python docker\launch.py
-
-# Modo CPU
-python docker\launch.py --cpu
-
-# Modo GPU
-python docker\launch.py --gpu
-
-# GPU específica
-python docker\launch.py --gpu-id 1
-```
-
-> [!IMPORTANT]
-> En Windows, Docker Desktop con WSL2 requiere el **nvidia-container-toolkit** instalado dentro de la distro WSL2. Consulta: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
-
 ### Docker Compose manual
 
 Si prefieres usar `docker compose` directamente:
 
 ```bash
 # CPU (por defecto)
-docker compose up -d genoly-cpu
+docker compose -f docker/docker-compose.yml up -d genoly-cpu
 
 # GPU (todas)
-docker compose --profile gpu up -d genoly-gpu
+docker compose -f docker/docker-compose.yml --profile gpu up -d genoly-gpu
 
 # GPU específica (índice 1)
-GPU_ID=1 docker compose --profile gpu-select up -d genoly-gpu-selected
+GPU_ID=1 docker compose -f docker/docker-compose.yml --profile gpu-select up -d genoly-gpu-selected
+
+# Puerto personalizado (variable GENOLY_PORT)
+GENOLY_PORT=8080 docker compose -f docker/docker-compose.yml --profile gpu up -d genoly-gpu
 ```
 
 ### Construcción manual con Dockerfile
 
 ```bash
 # CPU (imagen ligera)
-docker build --build-arg GENOLY_GPU_MODE=cpu -t genoly-gpu:cpu .
+docker build -f docker/Dockerfile --build-arg GENOLY_GPU_MODE=cpu -t genoly-gpu:cpu .
 
 # GPU (con CUDA)
-docker build --build-arg GENOLY_GPU_MODE=gpu -t genoly-gpu:gpu .
+docker build -f docker/Dockerfile --build-arg GENOLY_GPU_MODE=gpu -t genoly-gpu:gpu .
 
-# Ejecutar
-docker run -d --name genoly -p 8000:8000 genoly-gpu:gpu
+# Ejecutar con la GPU visible dentro del contenedor
+docker run -d --name genoly --gpus all \
+  -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+  -p 8000:8000 genoly-gpu:gpu
 ```
 
 ### Comprobaciones
 
 ```bash
 # Estado del contenedor
-docker compose ps
+docker compose -f docker/docker-compose.yml ps
 
 # Healthcheck
 curl http://localhost:8000/api/health
@@ -478,7 +502,7 @@ curl http://localhost:8000/api/device
 
 ### GPU dentro del contenedor
 
-La API funciona sin GPU (PyTorch cae a CPU automáticamente gracias a la auto-detección de Genoly). Para exponer la GPU NVIDIA al contenedor, el lanzador automático se encarga de configurar el bloque `deploy` en `docker-compose.yml`:
+La API funciona sin GPU (PyTorch cae a CPU automáticamente gracias a la auto-detección de Genoly). Para exponer la GPU NVIDIA al contenedor, los scripts de montaje automático lanzan el contenedor con `--gpus all` y el `docker-compose.yml` declara la reserva de dispositivos:
 
 ```yaml
 deploy:
@@ -504,6 +528,7 @@ deploy:
 | `nvidia-smi: command not found` | Instalar drivers NVIDIA y `nvidia-utils` (Linux) |
 | `Permission denied: /var/run/docker.sock` | Añadir usuario al grupo `docker`: `sudo usermod -aG docker $USER` |
 | El contenedor no detecta la GPU | Verificar `nvidia-container-toolkit`: `nvidia-smi` dentro del contenedor |
+| `could not select device driver "nvidia"` | Falta el toolkit: instalar `nvidia-container-toolkit` y `sudo systemctl restart docker` (los scripts `setup_docker.*` lo hacen en Linux; en Windows, Docker Desktop + WSL2) |
 | `docker: 'compose' is not a docker command` | Usar `docker-compose` en sistemas antiguos, o actualizar Docker |
 
 ## Pipeline de streaming (archivos multi-GB)
@@ -884,6 +909,7 @@ python descargar_datos_test.py
 - [x] Pipeline de streaming para datasets masivos: chunking de disco, RAM batching, micro-batching adaptativo de VRAM y progreso en tiempo real (SSE).
 - [x] Lanzador inteligente de Docker con detección automática de GPU y selección de dispositivo.
 - [x] Scripts de instalación automática para Windows (PowerShell) y Linux (bash).
+- [x] Montaje automático y robusto del contenedor Docker con GPU y verificación de CUDA (setup_docker.sh / setup_docker.ps1).
 - [ ] Soporte real de paralelización por lotes en GPU para el alineador.
 - [ ] Llamada de inserciones mediante CIGAR (lecturas alineadas).
 - [ ] Exportación a formatos estándar (SAM/BAM, VCF).
@@ -895,4 +921,3 @@ MIT
 
 > [!NOTE]
 > Este proyecto está en fase alpha (Development Status 3 - Alpha). Las APIs pueden cambiar en futuras versiones.
-```

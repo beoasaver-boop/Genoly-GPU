@@ -5,6 +5,7 @@ Usado por el script de lanzamiento y por el sistema de build.
 """
 import subprocess
 import json
+import re
 import sys
 import os
 from typing import List, Dict, Optional, Tuple
@@ -36,15 +37,15 @@ def detect_nvidia_gpus() -> List[Dict]:
         return []
 
 def get_cuda_version() -> Optional[str]:
-    """Obtiene la versión de CUDA del driver."""
+    """Obtiene la version de CUDA soportada por el driver (cabecera de nvidia-smi)."""
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query", "--show=driver"],
+            ["nvidia-smi"],
             capture_output=True, text=True, timeout=5, check=True
         )
-        for line in result.stdout.split("\n"):
-            if "CUDA Version" in line:
-                return line.split(":")[1].strip()
+        match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*([0-9]+(?:\.[0-9]+)?)", result.stdout)
+        if match:
+            return match.group(1)
         return None
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None

@@ -4,8 +4,8 @@ services:
   # ================================================================
   genoly-cpu:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         - GENOLY_GPU_MODE=cpu
         - GENOLY_PORT=${GENOLY_PORT:-8000}
@@ -30,8 +30,8 @@ services:
   # ================================================================
   genoly-gpu:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         - GENOLY_GPU_MODE=gpu
         - GENOLY_PORT=${GENOLY_PORT:-8000}
@@ -43,6 +43,7 @@ services:
       - GENOLY_DEVICE=cuda
       - GENOLY_PORT=${GENOLY_PORT:-8000}
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     restart: unless-stopped
     profiles: ["gpu"]
     deploy:
@@ -65,8 +66,8 @@ services:
   # ================================================================
   genoly-gpu-selected:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         - GENOLY_GPU_MODE=gpu
         - GENOLY_PORT=${GENOLY_PORT:-8000}
@@ -78,6 +79,7 @@ services:
       - GENOLY_DEVICE=cuda
       - GENOLY_PORT=${GENOLY_PORT:-8000}
       - CUDA_VISIBLE_DEVICES=${GPU_ID:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     restart: unless-stopped
     profiles: ["gpu-select"]
     deploy:
@@ -85,7 +87,6 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
               device_ids: ["${GPU_ID:-0}"]
               capabilities: [gpu]
     healthcheck:
