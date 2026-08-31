@@ -4,8 +4,8 @@ services:
   # ================================================================
   genoly-cpu:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         - GENOLY_GPU_MODE=cpu
         - GENOLY_PORT=${GENOLY_PORT:-8000}
@@ -18,7 +18,7 @@ services:
       - GENOLY_PORT=${GENOLY_PORT:-8000}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
+      test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -30,8 +30,8 @@ services:
   # ================================================================
   genoly-gpu:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         - GENOLY_GPU_MODE=gpu
         - GENOLY_PORT=${GENOLY_PORT:-8000}
@@ -53,7 +53,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
+      test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -65,8 +65,8 @@ services:
   # ================================================================
   genoly-gpu-selected:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         - GENOLY_GPU_MODE=gpu
         - GENOLY_PORT=${GENOLY_PORT:-8000}
@@ -85,11 +85,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
               device_ids: ["${GPU_ID:-0}"]
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
+      test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"GENOLY_PORT\"]}/api/health')"]
       interval: 30s
       timeout: 5s
       retries: 3

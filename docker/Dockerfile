@@ -73,12 +73,11 @@ ENV GENOLY_PORT=$GENOLY_PORT \
 
 WORKDIR /app
 
-# Instalar Python 3.12 y dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 \
+    python3.10 \
     python3-pip \
-    python3.12-venv \
-    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    python3.10-venv \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
 # PyTorch con CUDA 12.6 (build probada con RTX 3050)
