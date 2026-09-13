@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, PageHeader } from '../components/ui.jsx'
 import FastaPanel from '../components/FastaPanel.jsx'
+import SpectrumChart from '../components/SpectrumChart.jsx'
 import {
   IconHash,
   IconStack,
@@ -44,6 +45,7 @@ export default function Kmer() {
       if (upload) {
         const payload = {
           upload_id: upload.uploadId,
+          dataset_id: upload.datasetId,
           k,
           canonical,
           min_abundance: 1,
@@ -88,7 +90,7 @@ export default function Kmer() {
   }
 
   const spectrum = result?.spectrum ?? {}
-  const maxMult = Math.max(...Object.keys(spectrum).map(Number), 1)
+  const peakMult = Object.entries(spectrum).sort((a, b) => b[1] - a[1])[0]?.[0]
 
   return (
     <div className="space-y-8">
@@ -117,9 +119,25 @@ export default function Kmer() {
             {upload ? (
               <>
                 <dl>
-                  <FileRow label="Archivo" value={upload.source} />
-                  <FileRow label="Registros" value={upload.recordCount} />
-                  <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+                  <FileRow label="Origen" value={upload.datasetId ? 'Dataset NCBI' : upload.source} />
+                  {upload.datasetId ? (
+                    <>
+                      <FileRow label="FASTA" value={`${upload.fileCount} archivos`} />
+                      <FileRow
+                        label="Registros"
+                        value={upload.files?.reduce((a, f) => a + (f.records ?? 0), 0)}
+                      />
+                      <FileRow
+                        label="Bases totales"
+                        value={(upload.files?.reduce((a, f) => a + (f.total_bases ?? 0), 0) ?? 0).toLocaleString()}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <FileRow label="Registros" value={upload.recordCount} />
+                      <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+                    </>
+                  )}
                 </dl>
                 <button className="btn-ghost mt-3 w-full" onClick={() => setUpload(null)}>
                   Usar texto manual
@@ -263,24 +281,41 @@ export default function Kmer() {
                 </div>
               </Card>
 
-              <Card title="Espectro k-mer" icon={<IconChart className="h-5 w-5" />} subtitle="Distribución de multiplicidades">
-                <div className="flex h-32 items-end gap-1">
-                  {Object.entries(spectrum)
-                    .sort((a, b) => Number(a[0]) - Number(b[0]))
-                    .map(([mult, freq]) => (
-                      <div key={mult} className="flex flex-1 flex-col items-center gap-1">
-                        <div
-                          className="w-full rounded-t bg-gradient-to-t from-accent to-accent-soft shadow-glow"
-                          style={{
-                            height: `${(freq / Math.max(...Object.values(spectrum))) * 100}%`,
-                          }}
-                          title={`multiplicidad ${mult}: ${freq} k-mers`}
-                        />
-                        {Object.keys(spectrum).length <= 20 && (
-                          <span className="text-[10px] text-ink-faint">{mult}</span>
-                        )}
-                      </div>
-                    ))}
+              <Card
+                title="Espectro k-mer"
+                subtitle="Distribución de multiplicidades en escala logarítmica"
+                icon={<IconChart className="h-5 w-5" />}
+                actions={<Badge tone="accent">log</Badge>}
+              >
+                <SpectrumChart spectrum={spectrum} />
+
+                <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-ink-faint">
+                  <span>
+                    Pico:{' '}
+                    <span className="font-mono text-accent-glow">
+                      {peakMult}×
+                    </span>
+                  </span>
+                  <span>
+                    K-mers totales:{' '}
+                    <span className="font-mono">
+                      {result.total_kmers.toLocaleString()}
+                    </span>
+                  </span>
+                  <span>
+                    Únicos:{' '}
+                    <span className="font-mono">
+                      {result.total_unique.toLocaleString()}
+                    </span>
+                  </span>
+                  {result.genome_estimate && (
+                    <span>
+                      Estimación genoma:{' '}
+                      <span className="font-mono">
+                        {Math.round(result.genome_estimate).toLocaleString()} pb
+                      </span>
+                    </span>
+                  )}
                 </div>
                 <p className="mt-2 text-xs text-ink-faint">
                   El pico del espectro estima la cobertura media de la muestra.

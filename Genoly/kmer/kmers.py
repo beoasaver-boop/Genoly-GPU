@@ -1,4 +1,7 @@
+import os
+import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
@@ -34,6 +37,86 @@ SPILL_ROWS_PER_PARTITION = 2_000_000
 #: Filas por llamada a ``torch.unique`` en el finalize (acota la VRAM del
 #: dedup final; un micro-lote tipico de 32M filas ocupa ~1.3 GB de VRAM).
 GPU_BATCH_ROWS = 32_000_000
+
+
+def _env_spill_dir() -> Optional[str]:
+    """
+    Directorio base del derrame k-mer configurable (``GENOLY_SPILL_DIR``).
+
+    El derrame de un genoma completo con k grande puede ocupar decenas de
+    GB (p. ej. ~34 GB para el salmón con k=21). El directorio temporal
+    del sistema suele ser tmpfs (RAM), que no tiene capacidad para eso:
+    con esta variable se apunta a un directorio en disco. Si no se define,
+    se usa el directorio temporal del sistema.
+    """
+    env = os.environ.get("GENOLY_SPILL_DIR")
+    if not env:
+        return None
+    base = Path(env).expanduser()
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base)
+
+
+def _pid_alive(pid: int) -> bool:
+    """True si existe un proceso con ese PID (o no se puede comprobar)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def cleanup_orphan_spills(spill_dir: Optional[str] = None,
+                          min_age_seconds: int = 300) -> int:
+    """
+    Elimina los directorios de derrame k-mer huérfanos.
+
+    Cuando un trabajador GPU muere abruptamente (OOM del kernel, segfault,
+    ``kill -9``), su ``TemporaryDirectory`` no llega a limpiarse y queda
+    un ``genoly_kmer_<pid>_<aleatorio>/`` con decenas de GB en disco. El
+    prefijo incluye el PID del proceso que lo creó: un directorio es
+    huérfano si su PID ya no existe y supera la edad mínima.
+
+    Args:
+        spill_dir: Base de derrame a escanear (por defecto, la configurada
+            con ``GENOLY_SPILL_DIR`` o el directorio temporal del sistema).
+        min_age_seconds: Edad mínima del directorio antes de eliminarlo
+            (evita borrar un directorio recién creado por un job activo en
+            caso de reutilización de PID).
+
+    Returns:
+        Número de directorios eliminados.
+    """
+    base = Path(spill_dir) if spill_dir else Path(
+        _env_spill_dir() or tempfile.gettempdir())
+    if not base.is_dir():
+        return 0
+
+    removed = 0
+    now = time.time()
+    for entry in base.iterdir():
+        if not entry.is_dir() or not entry.name.startswith("genoly_kmer_"):
+            continue
+        try:
+            pid = int(entry.name.split("_")[2])
+        except (IndexError, ValueError):
+            pid = None  # nombre inesperado: se borra solo si es muy antiguo
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if pid is not None and _pid_alive(pid):
+            continue  # un job vivo lo está usando
+        if now - mtime < min_age_seconds:
+            continue
+        try:
+            shutil.rmtree(entry)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 #: Coste en bytes por base de la ruta numérica (uint8 H2D + dígitos
 #: int32 + palabras int32 + transitorios de Horner/revcomp + combine
@@ -113,8 +196,16 @@ class _PartitionedKmerAccumulator:
         self.group_rows = group_rows
         self.device = device
         self._owns_dir = spill_dir is None
-        self._tmp = (tempfile.TemporaryDirectory(prefix="genoly_kmer_")
-                     if self._owns_dir else None)
+        if spill_dir is None:
+            # base configurable con GENOLY_SPILL_DIR (disco real, no tmpfs).
+            # El prefijo incluye el PID del proceso: permite a la limpieza
+            # periódica detectar directorios huérfanos de trabajadores
+            # muertos (ver cleanup_orphan_spills).
+            self._tmp = tempfile.TemporaryDirectory(
+                prefix=f"genoly_kmer_{os.getpid()}_",
+                dir=_env_spill_dir())
+        else:
+            self._tmp = None
         self.spill_dir = Path(spill_dir) if spill_dir else Path(self._tmp.name)
         self._buffer: List[List[Tuple[torch.Tensor, torch.Tensor]]] = [
             [] for _ in range(n_partitions)]
@@ -141,8 +232,14 @@ class _PartitionedKmerAccumulator:
         del array ya ordenado (valores int64 + conteos int32) y el
         troceado por partición se hace en CPU con numpy (bincount sobre
         los valores ordenados: ``valor & (P-1)`` es el pid de cada fila).
-        Los slices son vistas del array D2H: el pico de RAM es el mismo
-        que con copias (las particiones acumulan de forma uniforme).
+
+        Las rebanadas se COPAN al guardarlas en el buffer: una vista numpy
+        retiene vivo el array D2H padre (``sv``/``sc``, que puede ocupar
+        varios GB por micro-lote). Sin la copia, los buffers de 256
+        particiones mantienen decenas de arrays padre a la vez y el pico de
+        RAM crece sin relación con las filas realmente retenidas (causó
+        OOM al contar dos genomas completos con k=21). El coste de la copia
+        es O(spill_rows * 12 B) por partición.
         """
         if values.numel() == 0:
             return
@@ -158,8 +255,9 @@ class _PartitionedKmerAccumulator:
         for p, size in enumerate(sizes.tolist()):
             if size == 0:
                 continue
-            self._buffer[p].append((sv[offset:offset + size],
-                                    sc[offset:offset + size]))
+            # copias independientes: liberan sv/sc al terminar el reparto
+            self._buffer[p].append((sv[offset:offset + size].copy(),
+                                    sc[offset:offset + size].copy()))
             offset += int(size)
 
             self._buffered[p] += int(size)
@@ -1066,21 +1164,45 @@ class KmerCounter:
                                 block_size: int = DEFAULT_BLOCK_SIZE,
                                 release_every: int = 4,
                                 ) -> Dict[str, object]:
-        """
-        Conteo de k-mers sobre un archivo FASTA de cualquier tamaño con
-        RAM, VRAM y disco acotadas, devolviendo **solo estadísticas
-        agregadas** (sin materializar la lista completa de k-mers).
+        """Conteo de k-mers de un único FASTA; ver :meth:`count_fastas_aggregated`."""
+        return self.count_fastas_aggregated(
+            [path], k, canonical=canonical, min_abundance=min_abundance,
+            top=top, ram_batch_size=ram_batch_size, window_size=window_size,
+            vram=vram, on_progress=on_progress, n_partitions=n_partitions,
+            spill_rows=spill_rows, spill_dir=spill_dir,
+            block_size=block_size, release_every=release_every)
 
-        Idéntico en exactitud a :meth:`count_fasta`: los micro-lotes se
-        agregan con ``torch.unique`` y se acumulan en un
-        :class:`_PartitionedKmerAccumulator`, que reparte por bits bajos
-        del código y derrama a ``.npy`` cuando una partición supera
-        ``spill_rows``. La fusión final se hace partición a partición,
-        de modo que el pico de RAM es O(total_uniques / n_partitions) y
-        el disco, O(total_uniques * 12 B).
+    def count_fastas_aggregated(self,
+                                paths,
+                                k: int,
+                                canonical: bool = True,
+                                min_abundance: int = 1,
+                                top: int = 20,
+                                ram_batch_size: int = DEFAULT_RAM_BATCH_SIZE,
+                                window_size: Optional[int] = None,
+                                vram: Optional[VRAMManager] = None,
+                                on_progress: Optional[Callable[[dict], None]] = None,
+                                 n_partitions: int = N_PARTITIONS,
+                                 spill_rows: int = SPILL_ROWS_PER_PARTITION,
+                                 spill_dir: Optional[str] = None,
+                                 block_size: int = DEFAULT_BLOCK_SIZE,
+                                 release_every: int = 4,
+                                 ) -> Dict[str, object]:
+        """
+        Conteo de k-mers sobre **uno o varios** archivos FASTA con un único
+        acumulador particionado: el resultado combinado es exacto (los
+        k-mers compartidos entre archivos no se duplican).
+
+        Pensado para datasets NCBI con varios ensamblajes del mismo genoma
+        (p. ej. GCA + GCF): se procesan todos en una sola pasada por
+        acumulador, con RAM, VRAM y disco acotadas, devolviendo solo
+        estadísticas agregadas (ver :meth:`count_fasta_aggregated`).
+
+        El progreso incluye ``file``/``file_index``/``files`` para saber qué
+        ensamblaje se está procesando.
 
         Args:
-            path: Ruta del archivo FASTA.
+            paths: Iterable de rutas a archivos FASTA.
             k: Longitud del k-mer (1 <= k <= 31).
             canonical: Contear cada k-mer junto a su reverse complement.
             min_abundance: Frecuencia mínima del k-mer.
@@ -1092,19 +1214,13 @@ class KmerCounter:
             on_progress: Callback ``fn(info: dict)`` con el progreso.
             n_partitions: Particiones del acumulador (potencia de 2).
             spill_rows: Filas por partición antes de derramar a disco.
-            spill_dir: Directorio de derrame (por defecto, temporal del
-                sistema, eliminado al terminar).
+            spill_dir: Directorio de derrame.
             block_size: Tamaño del bloque de lectura de disco.
-            release_every: Liberar VRAM/RAM (``gc + empty_cache``) cada N
-                micro-lotes en vez de tras cada uno; 4 reduce el coste
-                fijo sin riesgo (los presupuestos intermedios son algo
-                menores). Solo se aplica al gestor creado por defecto;
-                si se pasa ``vram``, manda el ajuste de ese objeto.
+            release_every: Liberar VRAM/RAM cada N micro-lotes.
 
         Returns:
             Dict con ``k``, ``total_unique``, ``total_kmers``,
-            ``spectrum`` (multiplicidad -> nº de k-mers) y ``top_kmers``
-            (lista de ``{"kmer": str, "count": int}``).
+            ``spectrum`` y ``top_kmers``.
         """
         self._check_k(k)
         if top < 0:
@@ -1123,38 +1239,50 @@ class KmerCounter:
         spectrum: Dict[int, int] = {}
         top_list: List[Tuple[int, int]] = []  # (conteo, código)
 
+        # Ventana única para todos los archivos (teselado consistente).
+        if window_size is None:
+            window_size = manager.suggest_window_bases(
+                estimate_kmer_bytes_per_base(k, canonical))
+        if window_size != 0 and window_size < k:
+            raise ValueError(
+                "window_size debe ser >= k para la ruta numérica")
+        effective_window = window_size
+
         try:
-            if window_size == 0:
-                # Registros completos como unidades (RAM acotada por el
-                # mayor registro del archivo): ruta por cadenas.
-                effective_window = 0
-                iterable: Iterable[str] = FastaReader(
-                    path, block_size).iter_sequences()
-                for values, counts in self._stream_micro_batches(
-                        iterable, k, canonical, ram_batch_size, 0,
-                        manager, on_progress):
-                    if values is not None:
-                        accumulator.add(values, counts)
-                        del values, counts
-            else:
-                # Ruta numérica: ventanas de códigos base-4 leídas por
-                # bloques de disco (sin cadenas de Python), subidas a la
-                # GPU como uint8 y computadas en int32.
-                if window_size is None:
-                    window_size = manager.suggest_window_bases(
-                        estimate_kmer_bytes_per_base(k, canonical))
-                if window_size < k:
-                    raise ValueError(
-                        "window_size debe ser >= k para la ruta numérica")
-                effective_window = window_size
-                windows = FastaReader(path, block_size).iter_windows_codes(
-                    window_size, overlap=k - 1)
-                for values, counts in self._stream_codes_micro_batches(
-                        windows, k, canonical, ram_batch_size,
-                        effective_window, manager, on_progress):
-                    if values is not None:
-                        accumulator.add(values, counts)
-                        del values, counts
+            paths = list(paths)
+            n_files = len(paths)
+            for idx, path in enumerate(paths):
+                path = Path(path)
+                fname = path.name
+
+                def on_file(info: dict, _idx=idx, _name=fname,
+                            _n=n_files) -> None:
+                    if on_progress is not None:
+                        on_progress({**info, "file": _name,
+                                     "file_index": _idx, "files": _n})
+
+                if window_size == 0:
+                    # Registros completos como unidades (RAM acotada por el
+                    # mayor registro del archivo): ruta por cadenas.
+                    iterable: Iterable[str] = FastaReader(
+                        path, block_size).iter_sequences()
+                    for values, counts in self._stream_micro_batches(
+                            iterable, k, canonical, ram_batch_size, 0,
+                            manager, on_file):
+                        if values is not None:
+                            accumulator.add(values, counts)
+                            del values, counts
+                else:
+                    # Ruta numérica: ventanas de códigos base-4 leídas por
+                    # bloques de disco (sin cadenas de Python).
+                    windows = FastaReader(path, block_size).iter_windows_codes(
+                        window_size, overlap=k - 1)
+                    for values, counts in self._stream_codes_micro_batches(
+                            windows, k, canonical, ram_batch_size,
+                            effective_window, manager, on_file):
+                        if values is not None:
+                            accumulator.add(values, counts)
+                            del values, counts
 
             for u_v, u_c in accumulator.finalize():
                 # finalize cede en el dispositivo (CPU en la fusión por

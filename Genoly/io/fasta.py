@@ -73,6 +73,33 @@ class FastaStats:
     first_length: int = 0
 
 
+@dataclass
+class FastaComposition:
+    """
+    Composición por base y recuento de registros de un FASTA, obtenidos
+    en streaming por bloques de disco sin materializar ninguna secuencia.
+
+    ``n`` acumula todo byte que no sea A/C/G/T (N, IUPAC o desconocido),
+    igual que la clave "N" de ``QualityAnalyzer.base_composition``.
+    """
+    records: int
+    total_bases: int
+    a: int = 0
+    c: int = 0
+    g: int = 0
+    t: int = 0
+    n: int = 0
+
+    @property
+    def gc_bases(self) -> int:
+        """Bases GC (C + G), sobre A/C/G/T/N del archivo."""
+        return self.c + self.g
+
+    def composition(self) -> dict:
+        """Diccionario de composición con claves A/C/G/T/N."""
+        return {"A": self.a, "C": self.c, "G": self.g, "T": self.t, "N": self.n}
+
+
 class _BlockLines:
     """
     Lee el archivo en bloques de disco (64 KiB por defecto) y reconstruye
@@ -447,6 +474,76 @@ class FastaReader:
             first_id=first_id,
             first_description=first_description,
             first_length=first_length,
+        )
+
+    def scan_composition(self) -> FastaComposition:
+        """
+        Recorre el archivo en streaming y devuelve el número de registros,
+        el total de bases y la composición A/C/G/T/N, sin materializar
+        ninguna secuencia completa.
+
+        Es la contrapartida de :meth:`scan_stats` para el control de
+        calidad: una sola pasada numpy por bloque (sin bucles por línea)
+        que anula el texto de las cabeceras y cuenta los códigos de base
+        restantes. La RAM es O(block_size) aunque un registro (o una
+        línea) ocupe varios GB, de modo que un genoma completo nunca
+        llega a copiarse a memoria.
+        """
+        records = 0
+        a = c = g = t = n = 0
+        prev_nl = True  # el archivo comienza en inicio de linea
+        in_header = False
+        first_block = True
+
+        with open(self.path, "rb") as fh:
+            for block in iter(lambda: fh.read(self.block_size), b""):
+                if first_block:
+                    first_block = False
+                    if block.startswith(_BOM_UTF8):
+                        block = block[len(_BOM_UTF8):]
+                        if not block:
+                            continue
+
+                codes = _FASTA_BYTE_CODES[np.frombuffer(block, np.uint8)]
+
+                is_start = np.empty(codes.size, dtype=bool)
+                is_start[0] = prev_nl
+                is_start[1:] = codes[:-1] == FASTA_CODE_SKIP
+                prev_nl = bool(codes[-1] == FASTA_CODE_SKIP)
+
+                if in_header:
+                    skips = np.flatnonzero(codes == FASTA_CODE_SKIP)
+                    if skips.size == 0:
+                        continue
+                    codes[:int(skips[0])] = FASTA_CODE_SKIP
+                    in_header = False
+
+                for pos in np.flatnonzero(
+                        (codes == FASTA_CODE_HEADER) & is_start).tolist():
+                    records += 1
+                    j = pos
+                    while j < codes.size and codes[j] != FASTA_CODE_SKIP:
+                        codes[j] = FASTA_CODE_SKIP
+                        j += 1
+                    in_header = j >= codes.size
+
+                valid = codes[codes != FASTA_CODE_SKIP]
+                if valid.size:
+                    counts = np.bincount(valid, minlength=256)
+                    ba, bc, bg, bt = (int(counts[0]), int(counts[1]),
+                                      int(counts[2]), int(counts[3]))
+                    a += ba
+                    c += bc
+                    g += bg
+                    t += bt
+                    # todo lo que no es A/C/G/T (N, IUPAC, '>' suelto) se
+                    # agrega como N, igual que base_composition
+                    n += int(valid.size) - ba - bc - bg - bt
+
+        return FastaComposition(
+            records=records,
+            total_bases=int(a + c + g + t + n),
+            a=a, c=c, g=g, t=t, n=n,
         )
 
     def read_all(self) -> List[FastaRecord]:

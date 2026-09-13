@@ -11,6 +11,12 @@ const SAMPLE_DESC =
 // en memoria; un genoma completo (p. ej. NC_000001.11) petaría el navegador.
 const INLINE_LIMIT = 2 * 1024 * 1024
 
+// Por encima de este tamaño la subida se hace por partes reanudables
+// (chunks de CHUNK_SIZE MB), para que una caída de red no reinicie el
+// envío de decenas de GB desde cero.
+const CHUNK_THRESHOLD = 1024 * 1024 * 1024
+const CHUNK_SIZE = 32 * 1024 * 1024
+
 const FIELDS = [
   { key: 'accession', label: 'Fragmento' },
   { key: 'species', label: 'Especie' },
@@ -26,11 +32,17 @@ export default function FastaPanel({ onLoaded, disableUpload = false }) {
   const [recordCount, setRecordCount] = useState(1)
   const [totalBases, setTotalBases] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(null)
+  const [statsPending, setStatsPending] = useState(false)
+  const [serverPath, setServerPath] = useState('')
+  const [datasetPath, setDatasetPath] = useState('')
+  const [dataset, setDataset] = useState(null)
   const [error, setError] = useState(null)
 
   const handleFile = (file) => {
     if (!file) return
     setError(null)
+    setDataset(null)
     if (file.size > INLINE_LIMIT) {
       if (disableUpload) {
         setError(
@@ -59,27 +71,164 @@ export default function FastaPanel({ onLoaded, disableUpload = false }) {
     reader.readAsText(file)
   }
 
+  const applyMeta = (res) => {
+    setMeta(parseHeader(res.first?.id ?? null, res.first?.description ?? null))
+    setSource(res.filename)
+    setRecordCount(res.records)
+    setTotalBases(res.total_bases)
+  }
+
+  const emitUpload = (res) =>
+    onLoaded?.({
+      mode: 'upload',
+      uploadId: res.upload_id,
+      source: res.filename,
+      recordCount: res.records,
+      totalBases: res.total_bases,
+    })
+
+  const pollStats = async (uploadId) => {
+    try {
+      const st = await api.uploadStats(uploadId)
+      if (st.stats_status === 'pending') {
+        setTimeout(() => pollStats(uploadId), 2000)
+        return
+      }
+      setStatsPending(false)
+      if (st.stats_status === 'error') {
+        setError(st.error || 'No se pudieron calcular las estadísticas del archivo.')
+        return
+      }
+      applyMeta(st)
+      emitUpload(st)
+    } catch (e) {
+      setStatsPending(false)
+      setError(e.message)
+    }
+  }
+
+  const finalizeUpload = async (res) => {
+    applyMeta(res)
+    emitUpload(res)
+    if (res.stats_status === 'pending') {
+      setStatsPending(true)
+      pollStats(res.upload_id)
+    }
+  }
+
   const uploadLarge = async (file) => {
     setUploading(true)
+    setStatsPending(false)
+    setDataset(null)
     try {
-      const res = await api.upload(file)
-      setMeta(parseHeader(res.first.id, res.first.description))
-      setSource(res.filename)
-      setRecordCount(res.records)
-      setTotalBases(res.total_bases)
-      onLoaded?.({
-        mode: 'upload',
-        uploadId: res.upload_id,
-        source: res.filename,
-        recordCount: res.records,
-        totalBases: res.total_bases,
-      })
+      if (file.size > CHUNK_THRESHOLD) {
+        finalizeUpload(await uploadChunked(file))
+      } else {
+        finalizeUpload(await api.upload(file))
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setUploading(false)
+      setUploadProgress(null)
+    }
+  }
+
+  const uploadChunked = async (file) => {
+    const init = await api.uploadChunkedInit(file.name, file.size)
+    const uploadId = init.upload_id
+    // reanuda si el servidor ya tiene bytes de un intento anterior
+    let offset = init.received
+    try {
+      const st = await api.uploadChunkedGet(uploadId)
+      offset = Math.min(st.received, file.size)
+    } catch {
+      // sin estado previo: empieza desde el offset del init
+    }
+    while (offset < file.size) {
+      const end = Math.min(offset + CHUNK_SIZE, file.size)
+      const blob = file.slice(offset, end)
+      const res = await api.uploadChunkedPut(uploadId, offset, blob)
+      offset = res.received
+      setUploadProgress(offset / file.size)
+    }
+    return api.uploadChunkedComplete(uploadId, file.size)
+  }
+
+  const registerServer = async (path) => {
+    setUploading(true)
+    setStatsPending(false)
+    setDataset(null)
+    try {
+      finalizeUpload(await api.registerUpload(path))
     } catch (e) {
       setError(e.message)
     } finally {
       setUploading(false)
     }
   }
+
+  const emitDataset = (res) =>
+    onLoaded?.({
+      mode: 'dataset',
+      datasetId: res.dataset_id,
+      kind: res.kind,
+      fileCount: res.file_count,
+      files: res.files.map((f) => ({
+        filename: f.filename,
+        records: f.records,
+        total_bases: f.total_bases,
+        stats_status: f.stats_status,
+      })),
+      status: res.status,
+    })
+
+  const pollDataset = async (datasetId) => {
+    try {
+      const st = await api.datasetStatus(datasetId)
+      if (st.status === 'pending') {
+        setTimeout(() => pollDataset(datasetId), 2000)
+        return
+      }
+      setStatsPending(false)
+      if (st.status === 'error') {
+        setError(st.error || 'No se pudieron calcular las estadísticas del dataset.')
+        return
+      }
+      setDataset(st)
+      emitDataset(st)
+    } catch (e) {
+      setStatsPending(false)
+      setError(e.message)
+    }
+  }
+
+  const registerDataset = async (path) => {
+    setUploading(true)
+    setStatsPending(false)
+    try {
+      const res = await api.registerDataset(path)
+      setDataset(res)
+      setSource(`${res.file_count} archivos FASTA (dataset)`)
+      emitDataset(res)
+      if (res.status === 'pending') {
+        setStatsPending(true)
+        pollDataset(res.dataset_id)
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const datasetReady = dataset && dataset.files.every((f) => f.stats_status !== 'pending')
+  const datasetRecords = dataset
+    ? dataset.files.reduce((a, f) => a + (f.records ?? 0), 0)
+    : 0
+  const datasetBases = dataset
+    ? dataset.files.reduce((a, f) => a + (f.total_bases ?? 0), 0)
+    : 0
 
   return (
     <Card
@@ -110,6 +259,64 @@ export default function FastaPanel({ onLoaded, disableUpload = false }) {
         <span className="truncate font-mono text-xs text-ink-faint">{source}</span>
       </div>
 
+      {uploadProgress != null && uploadProgress < 1 && (
+        <div className="mt-2">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-panel-2">
+            <div
+              className="h-full rounded-t bg-gradient-to-r from-accent-soft to-accent shadow-glow transition-all"
+              style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+            />
+          </div>
+          <p className="mt-1 text-[10px] text-ink-faint">
+            Subiendo por partes… {Math.round(uploadProgress * 100)}%
+          </p>
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          className="input flex-1 font-mono text-xs"
+          value={serverPath}
+          onChange={(e) => setServerPath(e.target.value)}
+          placeholder="/ruta/en/el/servidor/genoma.fna"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => registerServer(serverPath.trim())}
+          disabled={uploading || !serverPath.trim()}
+        >
+          Registrar ruta
+        </button>
+      </div>
+      <p className="mt-1 text-[10px] text-ink-faint">
+        Para genomas de decenas de GB: registra un archivo ya presente en el servidor en vez de
+        subirlo por HTTP.
+      </p>
+
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          className="input flex-1 font-mono text-xs"
+          value={datasetPath}
+          onChange={(e) => setDatasetPath(e.target.value)}
+          placeholder="/ruta/al/dataset/ncbi (carpeta o .zip)"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => registerDataset(datasetPath.trim())}
+          disabled={uploading || !datasetPath.trim()}
+        >
+          Registrar dataset
+        </button>
+      </div>
+      <p className="mt-1 text-[10px] text-ink-faint">
+        Dataset NCBI (descarga .zip de NCBI): descubre todos sus FASTA y analízalos a la vez
+        (p. ej. GCA + GCF del mismo genoma).
+      </p>
+
       {error && (
         <p className="mt-3 rounded-lg border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">
           {error}
@@ -132,8 +339,17 @@ export default function FastaPanel({ onLoaded, disableUpload = false }) {
           ))}
         </div>
         <p className="mt-2 text-[11px] text-ink-faint">
-          {recordCount} {recordCount === 1 ? 'registro' : 'registros'}
-          {totalBases != null && ` · ${totalBases.toLocaleString()} pb`}
+          {statsPending
+            ? 'Calculando estadísticas del dataset…'
+            : dataset
+              ? `${dataset.file_count} archivos FASTA${
+                  datasetReady
+                    ? ` · ${datasetRecords.toLocaleString()} registros · ${datasetBases.toLocaleString()} pb`
+                    : ''
+                }`
+              : `${recordCount} ${recordCount === 1 ? 'registro' : 'registros'}${
+                  totalBases != null ? ` · ${totalBases.toLocaleString()} pb` : ''
+                }`}
         </p>
       </div>
     </Card>

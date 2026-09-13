@@ -70,8 +70,12 @@ contexto.md
 *.bcf
 *.bcf.csi
 *.fa.gz
+*.fna
 *.fna.gz
 *.sam
+
+# Datasets NCBI descargados (ncbi_dataset/...)
+ncbi_dataset*/
 
 # Logs
 *.log

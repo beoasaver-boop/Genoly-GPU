@@ -195,6 +195,33 @@ class TestBlockReader(_TmpDirTestCase):
         with self.assertRaises(ValueError):
             list(FastaReader(path).iter_windows_codes(10, overlap=10))
 
+    def test_scan_composition(self):
+        path = self.path('comp.fasta')
+        write_fasta(path, [
+            FastaRecord(id='s1', sequence='ACGT' * 10, description='d'),
+            FastaRecord(id='s2', sequence='TTTT' * 5 + 'NNNN' * 2),
+        ], line_width=30)
+        comp = FastaReader(path).scan_composition()
+        self.assertEqual(comp.records, 2)
+        self.assertEqual(comp.total_bases, 40 + 20 + 8)
+        self.assertEqual(comp.composition(),
+                         {'A': 10, 'C': 10, 'G': 10, 'T': 10 + 20, 'N': 8})
+        self.assertEqual(comp.gc_bases, 20)
+        # sin cabeceras: 0 registros, bases contadas igualmente
+        empty = self.path('vacio_comp.fasta')
+        with open(empty, 'w') as fh:
+            fh.write('ACGTACGT\n')
+        st = FastaReader(empty).scan_composition()
+        self.assertEqual(st.records, 0)
+        self.assertEqual(st.total_bases, 8)
+        # N minúscula y caracteres IUPAC también se agregan como N
+        iupac = self.path('iupac.fasta')
+        with open(iupac, 'w') as fh:
+            fh.write('>x\nACGTNRYKMWS\n')
+        c = FastaReader(iupac).scan_composition()
+        self.assertEqual(c.composition(),
+                         {'A': 1, 'C': 1, 'G': 1, 'T': 1, 'N': 7})
+
     def test_scan_stats_casos_limite(self):
         casos = {
             'multi': '>s1 d1\n' + 'ACGT' * 30 + '\n>s2\n' + 'TTTT' * 40,
@@ -552,6 +579,40 @@ class TestAggregated(_TmpDirTestCase):
                 self.fasta, k=99, n_partitions=4, spill_rows=5,
                 spill_dir=spill)
         self.assertEqual(list(os.listdir(spill)), [])
+
+    def test_count_fastas_agregadas_equivale_a_concatenado(self):
+        # dos archivos FASTA separados == el mismo contenido concatenado:
+        # el resultado combinado es exacto (los k-mers compartidos no se
+        # duplican), igual que el pipeline de un solo archivo
+        half = len(self.seqs) // 2
+        f1 = self.path('agg1.fasta')
+        f2 = self.path('agg2.fasta')
+        fc = self.path('agg_c.fasta')
+        write_fasta(f1, [FastaRecord(id=f's{i}', sequence=s)
+                         for i, s in enumerate(self.seqs[:half])], line_width=60)
+        write_fasta(f2, [FastaRecord(id=f's{i}', sequence=s)
+                         for i, s in enumerate(self.seqs[half:])], line_width=60)
+        with open(fc, 'w') as fh:
+            fh.write(open(f1).read())
+            fh.write(open(f2).read())
+
+        kw = dict(k=self.k, canonical=True, top=10,
+                  n_partitions=4, spill_rows=5)
+        combined = self.kc.count_fastas_aggregated([f1, f2], **kw)
+        single = self.kc.count_fasta_aggregated(fc, **kw)
+        self.assertEqual(combined, single)
+        self.assertEqual(combined['total_kmers'],
+                         int(self._reference()[1].sum()))
+
+    def test_count_fastas_agregadas_progreso_por_archivo(self):
+        eventos = []
+        self.kc.count_fastas_aggregated(
+            [self.fasta, self.fasta], k=self.k, canonical=True, top=2,
+            n_partitions=4, spill_rows=10,
+            on_progress=lambda info: eventos.append(dict(info)))
+        # el progreso debe indicar el archivo (file/file_index/files)
+        self.assertTrue(any('file' in e for e in eventos))
+        self.assertEqual(eventos[-1]['files'], 2)
 
     def test_validaciones(self):
         with self.assertRaises(ValueError):

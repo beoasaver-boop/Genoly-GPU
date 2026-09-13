@@ -14,7 +14,12 @@ y sus streams SSE vive en memoria del proceso, y los trabajos GPU ya se
 serializan internamente; varios procesos competirían por la misma VRAM.
 """
 
+import logging
+import os
 import sys
+import threading
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Bootstrap de imports: añade la raíz del proyecto a sys.path para que
@@ -31,12 +36,46 @@ from fastapi.staticfiles import StaticFiles
 from Genoly import __version__
 from Genoly.core.gpu_setup import GpuSetup
 
-from ui.backend.routers import device, qc, kmer, variants, upload, quantitative, gblup, jobs
+from ui.backend.routers import device, qc, kmer, variants, upload, quantitative, gblup, jobs, dataset
+
+logger = logging.getLogger("genoly.ui")
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+
+#: Intervalo (segundos) de la limpieza periódica de derrames huérfanos.
+CLEANUP_INTERVAL = int(os.environ.get("GENOLY_CLEANUP_INTERVAL", "600"))
+
+
+def _spill_cleaner_loop() -> None:
+    """Elimina periódicamente los directorios de derrame de trabajadores
+    GPU muertos (OOM/segfault/kill). Nunca toca un derrame en uso."""
+    from Genoly.kmer.kmers import cleanup_orphan_spills
+    while True:
+        time.sleep(CLEANUP_INTERVAL)
+        try:
+            removed = cleanup_orphan_spills()
+            if removed:
+                logger.info("Limpieza de derrames: %d directorios huérfanos "
+                            "eliminados", removed)
+        except Exception as exc:  # nunca deja caer el servidor
+            logger.warning("Error en la limpieza de derrames: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    threading.Thread(target=_spill_cleaner_loop, daemon=True).start()
+    yield
+
 
 app = FastAPI(
     title="Genoly-GPU API",
     description="API REST de análisis genómico acelerado por GPU (NVIDIA/CUDA)",
     version=__version__,
+    lifespan=lifespan,
 )
 
 # CORS: permitir el dev server de Vite durante desarrollo
@@ -55,6 +94,7 @@ app.include_router(quantitative.router)
 app.include_router(gblup.router)
 app.include_router(upload.router)
 app.include_router(jobs.router)
+app.include_router(dataset.router)
 
 
 @app.get("/api/health")

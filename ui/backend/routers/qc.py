@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -6,19 +6,18 @@ from Genoly.qc.quality import QualityAnalyzer
 from Genoly.io.fastq import FastqRecord
 from Genoly.io.fasta import FastaReader
 
+from ui.backend.datasets import get_dataset
 from ui.backend.uploads import upload_path
 
 
 router = APIRouter(prefix="/api/qc", tags=["qc"])
-
-# Ventana máxima procesada a la vez (limita la VRAM con genomas completos)
-UPLOAD_WINDOW = 1_000_000
 
 
 class QcAnalyzeRequest(BaseModel):
     sequences: List[str] = []
     fastq_quality: Optional[List[str]] = None  # cadenas de calidad por lectura
     upload_id: Optional[str] = None  # archivo FASTA subido (streaming)
+    dataset_id: Optional[str] = None  # dataset NCBI (varios FASTA a la vez)
 
 
 class QcAnalyzeResponse(BaseModel):
@@ -30,38 +29,70 @@ class QcAnalyzeResponse(BaseModel):
     quality_by_position: Optional[List[float]] = None
 
 
-def _analyze_upload(qa: QualityAnalyzer, upload_id: str) -> QcAnalyzeResponse:
-    """Control de calidad de un FASTA subido, en streaming por ventanas."""
+def _analyze_upload(upload_id: str) -> QcAnalyzeResponse:
+    """
+    Control de calidad de un FASTA subido, en streaming por bloques de
+    disco sin materializar ninguna secuencia.
+
+    Usa ``FastaReader.scan_composition``: una sola pasada numpy por
+    bloques de 64 KiB (la misma técnica que ``scan_stats``) que anula las
+    cabeceras y cuenta registros, A/C/G/T/N y bases GC. La RAM es
+    O(block_size), de modo que un FASTA de un único registro de varios GB
+    (p. ej. 50-100 GB) no llega a copiarse a memoria.
+    """
     path = upload_path(upload_id)
-    total_bases = 0
-    num_records = 0
-    gc_bases = 0.0
-    composition = {base: 0 for base in "ACGTN"}
+    comp = FastaReader(path).scan_composition()
 
-    for record in FastaReader(path).records():
-        num_records += 1
-        length = len(record)
-        total_bases += length
-        for i in range(0, length, UPLOAD_WINDOW):
-            window = record.sequence[i:i + UPLOAD_WINDOW]
-            gc_bases += (
-                qa.gc_content_percent([window]).mean().item()
-                * len(window) / 100.0
-            )
-            for base, count in qa.base_composition([window]).items():
-                composition[base] += count
-
-    if num_records == 0 or total_bases == 0:
+    if comp.records == 0 or comp.total_bases == 0:
         return QcAnalyzeResponse(
             num_sequences=0, gc_content_percent=0.0,
             base_composition={}, mean_length=0.0,
         )
 
     return QcAnalyzeResponse(
-        num_sequences=num_records,
+        num_sequences=comp.records,
+        gc_content_percent=round(comp.gc_bases / comp.total_bases * 100.0, 4),
+        base_composition=comp.composition(),
+        mean_length=round(comp.total_bases / comp.records, 1),
+    )
+
+
+def _analyze_dataset(dataset_id: str) -> QcAnalyzeResponse:
+    """
+    Control de calidad **combinado** de todos los FASTA de un dataset NCBI.
+
+    Recorre cada ensamblaje con ``scan_composition`` (una pasada numpy por
+    bloques, RAM O(block_size)) y agrega registros, bases, composición y GC
+    de todos los archivos en un solo resultado.
+    """
+    dataset = get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset no encontrado")
+
+    total_records = 0
+    total_bases = 0
+    gc_bases = 0
+    composition = {base: 0 for base in "ACGTN"}
+
+    for finfo in dataset["files"]:
+        comp = FastaReader(finfo["path"]).scan_composition()
+        total_records += comp.records
+        total_bases += comp.total_bases
+        gc_bases += comp.gc_bases
+        for base in "ACGTN":
+            composition[base] += getattr(comp, base.lower())
+
+    if total_records == 0 or total_bases == 0:
+        return QcAnalyzeResponse(
+            num_sequences=0, gc_content_percent=0.0,
+            base_composition={}, mean_length=0.0,
+        )
+
+    return QcAnalyzeResponse(
+        num_sequences=total_records,
         gc_content_percent=round(gc_bases / total_bases * 100.0, 4),
         base_composition=composition,
-        mean_length=round(total_bases / num_records, 1),
+        mean_length=round(total_bases / total_records, 1),
     )
 
 
@@ -71,7 +102,9 @@ def analyze(qc_req: QcAnalyzeRequest) -> QcAnalyzeResponse:
     qa = QualityAnalyzer()
 
     if qc_req.upload_id:
-        return _analyze_upload(qa, qc_req.upload_id)
+        return _analyze_upload(qc_req.upload_id)
+    if qc_req.dataset_id:
+        return _analyze_dataset(qc_req.dataset_id)
 
     if not qc_req.sequences:
         return QcAnalyzeResponse(

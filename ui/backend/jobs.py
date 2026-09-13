@@ -13,6 +13,7 @@ en el event loop sin bloquearlo.
 """
 
 import asyncio
+import multiprocessing as mp
 import os
 import re
 import threading
@@ -24,6 +25,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from ui.backend import worker as worker_mod
+
 #: Máximo de trabajos terminados retenidos en memoria (evicción FIFO).
 MAX_FINISHED_JOBS = 50
 
@@ -31,6 +34,9 @@ MAX_FINISHED_JOBS = 50
 #: El valor por defecto, 1, serializa los análisis: los micro-lotes de
 #: VRAM asumen un único consumidor de la GPU del proceso.
 MAX_JOB_WORKERS = max(1, int(os.environ.get("GENOLY_MAX_WORKERS", "1")))
+
+#: Frecuencia máxima de publicación de eventos de progreso (segundos).
+PROGRESS_INTERVAL_SECONDS = 0.5
 
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -124,6 +130,88 @@ class JobManager:
                 job.status = "error"
                 job.error = str(exc) or exc.__class__.__name__
                 job.publish({"type": "error", "detail": job.error})
+
+        self._executor.submit(runner)
+        return job
+
+    def submit_process(self, job: Job, spec: Dict[str, Any],
+                       totals: Optional[Dict[str, Any]] = None) -> Job:
+        """
+        Ejecuta un trabajo en un PROCESO SEPARADO (``spawn``).
+
+        El hilo del executor serializa los trabajos GPU (max_workers=1);
+        cada uno corre en su propio proceso, de modo que un crash del
+        trabajo (OOM del kernel, segfault, ...) NUNCA mata el servidor: el
+        proceso hijo muere, el job se marca como error y la API sigue viva.
+
+        El progreso llega por una Pipe multiprocessing y se publica como
+        eventos SSE (fusionando ``totals`` y con throttling). Si el proceso
+        muere sin enviar mensaje (EOF), el job se marca como error con el
+        código de salida.
+
+        Args:
+            job: Trabajo creado con ``manager.create``.
+            spec: Especificación picklable del trabajo (ver ui.backend.worker).
+            totals: Totales (registros/bases) fusionados en cada evento de
+                progreso para que la UI calcule el porcentaje de avance.
+        """
+        throttle = {"t": 0.0}
+
+        def runner() -> None:
+            proc: Optional[mp.Process] = None
+            parent: Optional["mp.connection.Connection"] = None
+            job.status = "running"
+            job.publish({"type": "start", "kind": job.kind})
+            try:
+                parent, child = mp.get_context("spawn").Pipe(duplex=False)
+                proc = mp.get_context("spawn").Process(
+                    target=worker_mod.run_job, args=(spec, child))
+                proc.start()
+                child.close()
+
+                result: Optional[Dict[str, Any]] = None
+                while True:
+                    try:
+                        msg = parent.recv()
+                    except (EOFError, OSError):
+                        # el proceso murió sin terminar (OOM/segfault/exit)
+                        if proc is not None:
+                            proc.join(timeout=3)
+                        raise RuntimeError(
+                            f"El proceso trabajador murió durante el análisis "
+                            f"[exit={proc.exitcode if proc else None}]")
+                    kind, data = msg
+                    if kind == "progress":
+                        now = time.monotonic()
+                        if now - throttle["t"] >= PROGRESS_INTERVAL_SECONDS:
+                            throttle["t"] = now
+                            job.publish({"type": "progress",
+                                         **(totals or {}), **data})
+                    elif kind == "result":
+                        result = data
+                        break
+                    elif kind == "error":
+                        raise RuntimeError(data)
+
+                proc.join()
+                job.result = result
+                job.status = "done"
+                job.publish({"type": "done", "result": job.result})
+            except Exception as exc:  # el mensaje viaja al cliente vía SSE
+                job.status = "error"
+                job.error = str(exc) or exc.__class__.__name__
+                job.publish({"type": "error", "detail": job.error})
+                if proc is not None and proc.is_alive():
+                    proc.kill()
+                    proc.join(timeout=2)
+            finally:
+                if proc is not None and proc.is_alive():
+                    proc.terminate()
+                if parent is not None:
+                    try:
+                        parent.close()
+                    except Exception:
+                        pass
 
         self._executor.submit(runner)
         return job

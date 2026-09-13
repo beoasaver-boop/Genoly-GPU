@@ -1,10 +1,21 @@
 import torch
-import torch.nn.functional as F
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import time
 from dataclasses import dataclass
-import warnings
+
+# Motor nativo opcional (parasail, SIMD/C): sustituye el Smith-Waterman
+# escalar de Python, que es O(n^3) e inutilizable (una alineación 100x100
+# tarda ~34 s; con parasail, ~0.02 ms). Si no está instalado, se usa el
+# alineador Python como fallback.
+try:
+    import parasail as _parasail
+except ImportError:  # pragma: no cover
+    _parasail = None
+
+#: Escala entera para parasail (SIMD exige scoring entero). x2 preserva los
+#: parámetros por defecto del módulo (match=2, mismatch=-1, open=-2, ext=-0.5).
+_NATIVE_SCALE = 2
 
 @dataclass
 class AlignmentResult:
@@ -21,10 +32,13 @@ class AlignmentResult:
 class GPUSequenceAligner:
     """
     Alineador de secuencias genómicas con aceleración GPU.
-    Unifica funcionalidades de alineamiento y análisis básico.
+
+    Unifica funcionalidades de alineamiento y análisis básico. El núcleo de
+    Smith-Waterman usa el motor nativo parasail (SIMD) cuando está
+    disponible, y cae al algoritmo Python escalar en caso contrario.
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  match_score: float = 2.0,
                  mismatch_penalty: float = -1.0,
                  gap_open: float = -2.0,
@@ -32,7 +46,7 @@ class GPUSequenceAligner:
                  device: Optional[str] = None):
         """
         Inicializa el alineador con parámetros de scoring.
-        
+
         Args:
             match_score: Puntuación por coincidencia (default: 2.0)
             mismatch_penalty: Penalización por mismatch (default: -1.0)
@@ -44,29 +58,42 @@ class GPUSequenceAligner:
         self.mismatch_penalty = mismatch_penalty
         self.gap_open = gap_open
         self.gap_extend = gap_extend
-        
+
         # Configurar dispositivo
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
             self.device = torch.device(device)
-        
+
         # Mapeo de nucleótidos
         self.nucleotides = ['A', 'C', 'G', 'T', 'N']
         self.nuc_to_idx = {nuc: i for i, nuc in enumerate(self.nucleotides)}
         self.idx_to_nuc = {i: nuc for nuc, i in self.nuc_to_idx.items()}
-        
+
+        # Motor nativo parasail (matriz + penalizaciones enteras escaladas)
+        self.engine = 'parasail' if _parasail is not None else 'python'
+        self._native_matrix = None
+        self._native_open = 0
+        self._native_gap = 0
+        if _parasail is not None:
+            self._native_matrix = _parasail.matrix_create(
+                'ACGTN',
+                int(round(match_score * _NATIVE_SCALE)),
+                int(round(mismatch_penalty * _NATIVE_SCALE)),
+            )
+            # parasail espera penalizaciones positivas (las resta internamente)
+            self._native_open = int(round(-gap_open * _NATIVE_SCALE))
+            self._native_gap = int(round(-gap_extend * _NATIVE_SCALE))
+
         # Precomputar matriz de scoring
         self._init_scoring_matrix()
-        
+
         # Estado
         self.batch_size = 0
         self.max_sequence_length = 0
-        
-        print(f"GPUSequenceAligner inicializado en: {self.device}")
-        if self.device.type == 'cuda':
-            print(f"  GPU: {torch.cuda.get_device_name(self.device)}")
-            print(f"  Memoria: {torch.cuda.get_device_properties(self.device).total_memory / 1e9:.1f} GB")
+
+        print(f"GPUSequenceAligner inicializado en: {self.device} "
+              f"(motor: {self.engine})")
     
     def _init_scoring_matrix(self):
         """Inicializa la matriz de scoring en el dispositivo adecuado"""
@@ -130,33 +157,41 @@ class GPUSequenceAligner:
     def align_pair(self, query: str, target: str) -> AlignmentResult:
         """
         Alinea un par de secuencias usando algoritmo Smith-Waterman.
-        
+
         Args:
             query: Secuencia query
             target: Secuencia target/referencia
-            
+
         Returns:
             AlignmentResult con toda la información
         """
-        # Codificar secuencias
-        query_encoded = self.encode_sequence(query)
-        target_encoded = self.encode_sequence(target)
-        
-        # Ejecutar alineamiento
-        score, aligned_q, aligned_t = self._smith_waterman(query_encoded, target_encoded)
-        
+        if not query or not target:
+            return AlignmentResult(
+                score=0.0, aligned_query='', aligned_target='',
+                alignment_length=0, identity_percent=0.0,
+                gaps=0, mismatches=0, cigar_string='')
+
+        if self.engine == 'parasail':
+            score, aligned_q, aligned_t = self._align_native(query, target)
+        else:
+            # Codificar secuencias
+            query_encoded = self.encode_sequence(query)
+            target_encoded = self.encode_sequence(target)
+            score, aligned_q, aligned_t = self._smith_waterman(
+                query_encoded, target_encoded)
+
         # Calcular métricas
         alignment_len = len(aligned_q)
         identity = sum(1 for q, t in zip(aligned_q, aligned_t) if q == t and q != '-')
         identity_pct = (identity / alignment_len * 100) if alignment_len > 0 else 0
-        
+
         gaps = aligned_q.count('-') + aligned_t.count('-')
-        mismatches = sum(1 for q, t in zip(aligned_q, aligned_t) 
+        mismatches = sum(1 for q, t in zip(aligned_q, aligned_t)
                         if q != t and q != '-' and t != '-')
-        
+
         # Generar CIGAR string simplificado
         cigar = self._generate_cigar(aligned_q, aligned_t)
-        
+
         return AlignmentResult(
             score=score,
             aligned_query=aligned_q,
@@ -167,6 +202,18 @@ class GPUSequenceAligner:
             mismatches=mismatches,
             cigar_string=cigar
         )
+
+    def _align_native(self, query: str, target: str) -> Tuple[float, str, str]:
+        """
+        Smith-Waterman local con el motor nativo parasail (SIMD).
+
+        Las penalizaciones y el match/mismatch se escalan x2 a enteros; el
+        score se devuelve en la escala original (dividido por la escala).
+        """
+        res = _parasail.sw_trace_scan_sat(
+            query, target, self._native_open, self._native_gap,
+            self._native_matrix)
+        return res.score / _NATIVE_SCALE, res.query, res.ref
     
     def align_batch(self, queries: List[str], targets: List[str]) -> List[AlignmentResult]:
         """
@@ -184,17 +231,12 @@ class GPUSequenceAligner:
         
         batch_size = len(queries)
         results = []
-        
-        # Para batches pequeños, procesar en serie (podría optimizarse)
-        if batch_size < 100:  # Threshold para procesamiento en paralelo
-            for q, t in zip(queries, targets):
-                results.append(self.align_pair(q, t))
-        else:
-            # Aquí iría la implementación batch en GPU verdadera
-            warnings.warn("Batch processing no implementado aún, procesando en serie")
-            for q, t in zip(queries, targets):
-                results.append(self.align_pair(q, t))
-        
+
+        # El motor nativo (parasail) es O(n^2) SIMD: procesar en serie es
+        # suficiente para miles de pares por segundo.
+        for q, t in zip(queries, targets):
+            results.append(self.align_pair(q, t))
+
         return results
     
     def find_variants(self, aligned_query: str, aligned_target: str) -> List[Dict[str, Any]]:

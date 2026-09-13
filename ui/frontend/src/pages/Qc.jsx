@@ -48,7 +48,7 @@ export default function Qc() {
     try {
       let payload
       if (upload) {
-        payload = { upload_id: upload.uploadId }
+        payload = { upload_id: upload.uploadId, dataset_id: upload.datasetId }
       } else {
         const seqs = sequences
           .split('\n')
@@ -99,9 +99,25 @@ export default function Qc() {
               actions={<Badge tone="ok">streaming</Badge>}
             >
               <dl>
-                <FileRow label="Archivo" value={upload.source} />
-                <FileRow label="Registros" value={upload.recordCount} />
-                <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+                <FileRow label="Origen" value={upload.datasetId ? 'Dataset NCBI' : upload.source} />
+                {upload.datasetId ? (
+                  <>
+                    <FileRow label="FASTA" value={`${upload.fileCount} archivos`} />
+                    <FileRow
+                      label="Registros"
+                      value={upload.files?.reduce((a, f) => a + (f.records ?? 0), 0)}
+                    />
+                    <FileRow
+                      label="Bases totales"
+                      value={(upload.files?.reduce((a, f) => a + (f.total_bases ?? 0), 0) ?? 0).toLocaleString()}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <FileRow label="Registros" value={upload.recordCount} />
+                    <FileRow label="Bases totales" value={upload.totalBases?.toLocaleString()} />
+                  </>
+                )}
               </dl>
               <button className="btn-primary mt-3 w-full" onClick={analyze} disabled={loading}>
                 {loading ? 'Analizando…' : 'Analizar'}

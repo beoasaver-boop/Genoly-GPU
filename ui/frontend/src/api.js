@@ -20,6 +20,22 @@ async function request(path, options = {}) {
   return res.json()
 }
 
+// fetch para cuerpos binarios (chunks de subida): sin cabecera JSON.
+async function rawFetch(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, options)
+  if (!res.ok) {
+    let detail = await res.text()
+    try {
+      const parsed = JSON.parse(detail)
+      if (parsed && typeof parsed.detail === 'string') detail = parsed.detail
+    } catch {
+      // cuerpo no JSON: se muestra tal cual
+    }
+    throw new Error(detail || `Error ${res.status}`)
+  }
+  return res.json()
+}
+
 export const api = {
   health: () => request('/health'),
   setup: () => request('/setup'),
@@ -30,6 +46,33 @@ export const api = {
     form.append('file', file)
     return request('/upload', { method: 'POST', body: form })
   },
+
+  uploadStats: (uploadId) => request(`/upload/${uploadId}`),
+
+  registerUpload: (path) =>
+    request('/upload/register', { method: 'POST', body: JSON.stringify({ path }) }),
+
+  uploadChunkedInit: (filename, size) =>
+    request('/upload/chunked', { method: 'POST', body: JSON.stringify({ filename, size }) }),
+
+  uploadChunkedGet: (uploadId) => request(`/upload/chunked/${uploadId}`),
+
+  uploadChunkedPut: (uploadId, offset, blob) =>
+    rawFetch(`/upload/chunked/${uploadId}?offset=${offset}`, {
+      method: 'PUT',
+      body: blob,
+    }),
+
+  uploadChunkedComplete: (uploadId, size) =>
+    request(`/upload/chunked/${uploadId}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ size }),
+    }),
+
+  registerDataset: (path) =>
+    request('/dataset/register', { method: 'POST', body: JSON.stringify({ path }) }),
+
+  datasetStatus: (datasetId) => request(`/dataset/${datasetId}`),
 
   analyzeQc: (payload) =>
     request('/qc/analyze', { method: 'POST', body: JSON.stringify(payload) }),

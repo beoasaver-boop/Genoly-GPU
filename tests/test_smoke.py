@@ -433,6 +433,66 @@ class TestGBLUP(unittest.TestCase):
             GenomicBLUP('cpu').blup()
 
 
+class TestDataset(unittest.TestCase):
+    """Descubrimiento y registro de datasets NCBI (múltiples FASTA)."""
+
+    def setUp(self):
+        from pathlib import Path
+        import tempfile
+        from ui.backend import datasets as ds
+        self.ds = ds
+        self.tmp = tempfile.mkdtemp(prefix='ds_test_')
+        self._orig_dir = ds._DATASETS_DIR
+        ds._DATASETS_DIR = Path(self.tmp)
+        ds._REGISTRY_PATH = Path(self.tmp) / 'registry.json'
+
+    def tearDown(self):
+        import shutil
+        self.ds._DATASETS_DIR = self._orig_dir
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mkfasta(self, path, seqs):
+        from Genoly import write_fasta, FastaRecord
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_fasta(path, [FastaRecord(id=f's{i}', sequence=s)
+                           for i, s in enumerate(seqs)], line_width=20)
+
+    def test_discover_fastas_recursivo(self):
+        base = os.path.join(self.tmp, 'ncbi_dataset', 'data')
+        self._mkfasta(os.path.join(base, 'GCA_X', 'a.fna'), ['ACGT' * 5])
+        self._mkfasta(os.path.join(base, 'GCF_Y', 'b.fasta'), ['TTTT' * 5])
+        with open(os.path.join(base, 'nota.txt'), 'w') as fh:
+            fh.write('no fasta')
+        fastas = self.ds.discover_fastas(os.path.join(self.tmp, 'ncbi_dataset'))
+        self.assertEqual(len(fastas), 2)
+        self.assertTrue(all(p.suffix.lower() in ('.fna', '.fasta')
+                            for p in fastas))
+
+    def test_register_dataset_escanea_en_segundo_plano(self):
+        import time
+        d = os.path.join(self.tmp, 'data')
+        self._mkfasta(os.path.join(d, 'GCA_X', 'a.fna'),
+                      ['ACGT' * 5, 'TTTT' * 4])
+        self._mkfasta(os.path.join(d, 'GCF_Y', 'b.fna'), ['GGGG' * 5])
+        meta = self.ds.register_dataset(d)
+        self.assertEqual(len(meta['files']), 2)
+        for _ in range(100):
+            cur = self.ds.get_dataset(meta['dataset_id'])
+            if cur['status'] != 'pending':
+                break
+            time.sleep(0.05)
+        self.assertEqual(cur['status'], 'ready')
+        self.assertEqual([f['records'] for f in cur['files']], [2, 1])
+
+    def test_zip_slip_rechazado(self):
+        import zipfile
+        zip_path = os.path.join(self.tmp, 'evil.zip')
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.writestr('../escapado.fna', '>x\nACGT\n')
+        with self.assertRaises(Exception):
+            self.ds.register_dataset(zip_path)
+
+
 class TestPreprocess(unittest.TestCase):
     def setUp(self):
         self.tmpdir = os.path.join(os.path.dirname(__file__), '_tmp_prep')
@@ -522,6 +582,49 @@ class TestPreprocess(unittest.TestCase):
         path = self._write('corto.csv', "feno,m1\n1.0,0\n2.0,1\n0.5,2\n")
         with self.assertRaises(ValueError):
             prepare_quantitative_data(path)
+
+
+class TestAlignment(unittest.TestCase):
+    """Alineador Smith-Waterman (motor nativo parasail si está disponible)."""
+
+    def setUp(self):
+        from Genoly.alignment.alignment import GPUSequenceAligner
+        self.a = GPUSequenceAligner(device='cpu')
+
+    def test_secuencias_identicas(self):
+        r = self.a.align_pair('ACGTACGT', 'ACGTACGT')
+        self.assertEqual(r.score, 16.0)
+        self.assertEqual(r.identity_percent, 100.0)
+        self.assertEqual(r.mismatches, 0)
+        self.assertEqual(r.gaps, 0)
+
+    def test_detecta_variante(self):
+        r = self.a.align_pair('ACGTACGT', 'ACGTTCGT')
+        self.assertEqual(r.mismatches, 1)
+        self.assertGreater(r.identity_percent, 80.0)
+        variants = self.a.find_variants(r.aligned_query, r.aligned_target)
+        self.assertEqual(len(variants), 1)
+        self.assertEqual(variants[0]['type'], 'SNV')
+
+    def test_score_paridad_con_python(self):
+        # el motor nativo (parasail) y el escalar Python deben coincidir
+        if self.a.engine != 'parasail':
+            self.skipTest('parasail no disponible')
+        import random
+        rng = random.Random(42)
+        bases = 'ACGT'
+        n = 30
+        q = ''.join(rng.choice(bases) for _ in range(n))
+        t = ''.join(rng.choice(bases) for _ in range(n))
+        enc_q, enc_t = self.a.encode_sequence(q), self.a.encode_sequence(t)
+        py_score, _, _ = self.a._smith_waterman(enc_q, enc_t)
+        nat = self.a._align_native(q, t)
+        self.assertAlmostEqual(py_score, nat[0], delta=1e-6)
+
+    def test_secuencia_vacia(self):
+        r = self.a.align_pair('', 'ACGT')
+        self.assertEqual(r.score, 0.0)
+        self.assertEqual(r.alignment_length, 0)
 
 
 if __name__ == "__main__":
