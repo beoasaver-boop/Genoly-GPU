@@ -1,6 +1,7 @@
+import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 from Genoly.core.device import DeviceManager
 from Genoly.encoding.encoder import SequenceEncoder
@@ -262,3 +263,250 @@ class QualityAnalyzer:
         print(f"Contenido GC: {report.gc_content_percent:.2f}%")
         print(f"Composición: {report.base_composition}")
         print("=" * 60)
+
+    # ------------------------------------------------------------------ #
+    # Análisis en streaming (archivos FASTQ de decenas de GB)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _scores_array(quality: str) -> np.ndarray:
+        """Scores Phred (int32) de una cadena de calidad, sin padding."""
+        if not quality:
+            return np.zeros(0, dtype=np.int32)
+        return (np.frombuffer(quality.encode("latin-1"), np.uint8)
+                .astype(np.int32) - 33)
+
+    @staticmethod
+    def _trim_pos(scores: np.ndarray, min_quality: int,
+                  window_size: int) -> int:
+        """
+        Posición de recorte 3' con ventana deslizante (vectorizado).
+
+        Devuelve la primera posición donde la media de la ventana cae por
+        debajo del umbral; 0 si hay que descartar la lectura; len(scores)
+        si no hay ningún punto de recorte.
+        """
+        n = int(scores.shape[0])
+        if n <= window_size:
+            return n
+        cs = np.cumsum(scores)
+        win_sums = np.empty(n - window_size + 1, dtype=np.int64)
+        win_sums[0] = int(cs[window_size - 1])
+        win_sums[1:] = cs[window_size:] - cs[: -window_size]
+        bad = np.flatnonzero(win_sums < min_quality * window_size)
+        return int(bad[0]) if bad.size else n
+
+    def trim_by_quality_batch(self, records: List[FastqRecord],
+                              min_quality: int = 20,
+                              window_size: int = 5) -> List[FastqRecord]:
+        """
+        Recorta las lecturas desde el extremo 3' (ventana deslizante),
+        vectorizado con numpy (cumsum). Lecturas recortadas a 0 se
+        descartan. Equivalente a :meth:`trim_by_quality`.
+        """
+        trimmed: List[FastqRecord] = []
+        for record in records:
+            scores = self._scores_array(record.quality)
+            pos = self._trim_pos(scores, min_quality, window_size)
+            if pos > 0:
+                trimmed.append(FastqRecord(
+                    id=record.id,
+                    sequence=record.sequence[:pos],
+                    quality=record.quality[:pos],
+                    plus=record.plus,
+                ))
+        return trimmed
+
+    def filter_by_quality_batch(self, records: List[FastqRecord],
+                                min_mean_quality: float = 20.0,
+                                min_length: int = 20,
+                                max_n_ratio: float = 0.1
+                                ) -> List[FastqRecord]:
+        """Equivalente a :meth:`filter_by_quality`, vectorizado con numpy."""
+        kept: List[FastqRecord] = []
+        for record in records:
+            scores = self._scores_array(record.quality)
+            if scores.size == 0:
+                continue
+            if float(scores.mean()) < min_mean_quality:
+                continue
+            if len(record.sequence) < min_length:
+                continue
+            if record.sequence.upper().count("N") / len(record.sequence) \
+                    > max_n_ratio:
+                continue
+            kept.append(record)
+        return kept
+
+    def analyze_stream(self, records: Iterator[FastqRecord],
+                       batch_size: int = 4096,
+                       max_position: int = 300,
+                       histogram_bins: int = 100,
+                       on_progress: Optional[Callable[[dict], None]] = None,
+                       ) -> dict:
+        """
+        Control de calidad FastQC-like de un FASTQ en streaming.
+
+        Recorre un iterable de lecturas por lotes de ``batch_size`` (RAM
+        acotada) y agrega: lecturas, bases, longitud media/mínima/máxima,
+        calidad media, contenido GC, composición, calidad media por
+        posición (hasta ``max_position``) e histograma de longitudes.
+
+        Args:
+            records: Iterador perezoso de lecturas.
+            batch_size: Lecturas por lote de RAM.
+            max_position: Posiciones consideradas en la curva de calidad.
+            histogram_bins: Nº de bins del histograma de longitudes.
+            on_progress: Callback ``fn(info)`` tras cada lote con
+                ``{"reads", "bases"}``.
+
+        Returns:
+            Dict con el reporte (num_reads, total_bases, mean_read_length,
+            mean_quality, gc_content_percent, base_composition,
+            quality_by_position, length_histogram, length_bin_size).
+        """
+        num_reads = 0
+        total_bases = 0
+        gc_bases = 0.0
+        composition = {base: 0 for base in "ACGTN"}
+        qsum = np.zeros(max_position, dtype=np.float64)
+        qcount = np.zeros(max_position, dtype=np.float64)
+        q_total = 0.0
+        q_n = 0
+        lengths_sum = 0
+        min_len = None
+        max_len = 0
+        # histograma de longitudes (bins de ancho fijo, cola en el último)
+        bin_size = max(1, max_position // histogram_bins)
+        hist = np.zeros(histogram_bins, dtype=np.int64)
+
+        batch: List[FastqRecord] = []
+
+        def flush() -> None:
+            nonlocal num_reads, total_bases, gc_bases, q_total, q_n
+            nonlocal lengths_sum, min_len, max_len
+            seqs = [r.sequence for r in batch]
+            quals = [r.quality for r in batch]
+            b_bases = sum(len(s) for s in seqs)
+            num_reads += len(batch)
+            total_bases += b_bases
+            lengths_sum += b_bases
+
+            gc_frac = self.gc_content_percent(seqs).mean().item()
+            gc_bases += gc_frac / 100.0 * b_bases
+            comp = self.base_composition(seqs)
+            for base in composition:
+                composition[base] += comp[base]
+
+            for q in quals:
+                a = self._scores_array(q)
+                if a.size == 0:
+                    continue
+                q_total += float(a.sum())
+                q_n += int(a.size)
+                cov = min(a.size, max_position)
+                qsum[:cov] += a[:cov]
+                qcount[:cov] += 1.0
+                L = len(q)
+                min_len = L if min_len is None else min(min_len, L)
+                max_len = max(max_len, L)
+                hist[min(L // bin_size, histogram_bins - 1)] += 1
+
+            batch.clear()
+            if on_progress is not None:
+                on_progress({"reads": num_reads, "bases": total_bases})
+
+        for record in records:
+            batch.append(record)
+            if len(batch) >= batch_size:
+                flush()
+        if batch:
+            flush()
+
+        if num_reads == 0:
+            return {
+                "num_reads": 0, "total_bases": 0, "mean_read_length": 0.0,
+                "mean_quality": 0.0, "gc_content_percent": 0.0,
+                "base_composition": {}, "quality_by_position": [],
+                "length_histogram": [], "length_bin_size": bin_size,
+            }
+
+        # recortar posiciones sin cobertura de la curva de calidad
+        covered = qcount > 0
+        last = int(np.flatnonzero(covered).max()) + 1 if covered.any() else 0
+        quality_by_position = [
+            round(float(v), 2)
+            for v in (qsum[:last] / qcount[:last].clip(min=1))
+        ]
+
+        return {
+            "num_reads": num_reads,
+            "total_bases": total_bases,
+            "mean_read_length": round(lengths_sum / num_reads, 1),
+            "min_length": min_len,
+            "max_length": max_len,
+            "mean_quality": round(q_total / q_n, 2) if q_n else 0.0,
+            "gc_content_percent": round(
+                gc_bases / total_bases * 100.0, 4) if total_bases else 0.0,
+            "base_composition": composition,
+            "quality_by_position": quality_by_position,
+            "length_histogram": [int(v) for v in hist],
+            "length_bin_size": bin_size,
+        }
+
+    def process_stream(self, records: Iterator[FastqRecord], out_fh,
+                       min_quality: int = 20,
+                       window_size: int = 5,
+                       min_length: int = 20,
+                       min_mean_quality: float = 20.0,
+                       max_n_ratio: float = 0.1,
+                       batch_size: int = 4096,
+                       on_progress: Optional[Callable[[dict], None]] = None,
+                       ) -> Tuple[int, int, int, int]:
+        """
+        Pipeline de preprocesamiento en streaming: trim por calidad (3'),
+        filtro por calidad media/longitud/N, y escritura del FASTQ limpio.
+
+        Args:
+            records: Iterador perezoso de lecturas de entrada.
+            out_fh: Fichero abierto en modo texto donde escribir el resultado.
+            min_quality: Umbral de la ventana deslizante de recorte.
+            window_size: Tamaño de la ventana de recorte.
+            min_length: Longitud mínima tras el recorte.
+            min_mean_quality: Calidad media mínima de la lectura.
+            max_n_ratio: Proporción máxima de bases N (0-1).
+            batch_size: Lecturas por lote de RAM.
+            on_progress: Callback ``fn(info)`` con ``{"reads_in"}``.
+
+        Returns:
+            Tupla (lecturas_in, lecturas_out, bases_in, bases_out).
+        """
+        reads_in = 0
+        reads_out = 0
+        bases_in = 0
+        bases_out = 0
+        batch: List[FastqRecord] = []
+
+        def flush() -> None:
+            nonlocal reads_in, reads_out, bases_in, bases_out
+            reads_in += len(batch)
+            bases_in += sum(len(r) for r in batch)
+            trimmed = self.trim_by_quality_batch(
+                batch, min_quality, window_size)
+            kept = self.filter_by_quality_batch(
+                trimmed, min_mean_quality, min_length, max_n_ratio)
+            for record in kept:
+                out_fh.write(f"@{record.id}\n{record.sequence}\n"
+                             f"{record.plus or '+'}\n{record.quality}\n")
+                bases_out += len(record)
+            reads_out += len(kept)
+            batch.clear()
+            if on_progress is not None:
+                on_progress({"reads_in": reads_in})
+
+        for record in records:
+            batch.append(record)
+            if len(batch) >= batch_size:
+                flush()
+        if batch:
+            flush()
+        return reads_in, reads_out, bases_in, bases_out

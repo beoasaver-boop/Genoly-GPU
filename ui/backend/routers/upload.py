@@ -23,9 +23,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from Genoly.io.fasta import FastaReader
+from Genoly.io.fastq import FastqReader
 
 from ui.backend.uploads import (
     UPLOAD_DIR,
@@ -44,6 +46,21 @@ CHUNK_BYTES = 1024 * 1024
 #: Tamaño máximo recomendado por chunk en la subida por partes. La
 #: escritura es en streaming (nunca se bufferiza el chunk completo en RAM).
 MAX_CHUNK_PUT = 256 * 1024 * 1024
+
+_FASTA_SUFFIXES = (".fasta", ".fa", ".fna", ".txt")
+_FASTQ_SUFFIXES = (".fastq", ".fq")
+
+
+def _upload_kind(filename: str) -> str:
+    """Tipo de subida según la extensión: 'fasta' o 'fastq'."""
+    suffix = Path(filename).suffix.lower()
+    if suffix in _FASTQ_SUFFIXES:
+        return "fastq"
+    return "fasta"
+
+
+def _file_ext(kind: str) -> str:
+    return "fastq" if kind == "fastq" else "fasta"
 
 
 async def _iter_chunks(file: UploadFile,
@@ -118,7 +135,11 @@ def _chunked_dest(upload_id: str) -> Path:
             or len(upload_id) != 32:
         raise HTTPException(status_code=400,
                             detail="Identificador de subida inválido")
-    dest = UPLOAD_DIR / f"{upload_id}.fasta"
+    meta = get_upload(upload_id)
+    if meta is None:
+        raise HTTPException(status_code=404,
+                            detail="Subida por partes no encontrada")
+    dest = Path(meta["path"])
     if not dest.is_file():
         raise HTTPException(status_code=404,
                             detail="Subida por partes no encontrada")
@@ -135,31 +156,39 @@ def _sha256_file(path: Path) -> str:
 
 
 def _background_stats(upload_id: str, dest: Path) -> None:
-    """Escanea las estadísticas del FASTA en un hilo de fondo y actualiza
+    """Escanea las estadísticas del archivo en un hilo de fondo y actualiza
     el registro. Los archivos ilegibles o sin registros FASTA se borran
     (solo vía multipart; las rutas registradas se dejan intactas) y el
     estado queda en ``error``."""
+    kind = _upload_kind(dest.name)
     try:
-        stats = FastaReader(dest).scan_stats()
+        if kind == "fastq":
+            stats = FastqReader(dest).scan_stats()
+            records = stats.reads
+            total_bases = stats.total_bases
+            first = ({"id": stats.first_id or "", "description": None,
+                      "length": stats.first_length}
+                     if stats.first_id is not None else None)
+        else:
+            stats = FastaReader(dest).scan_stats()
+            records = stats.records
+            total_bases = stats.total_bases
+            first = ({"id": stats.first_id or "",
+                      "description": stats.first_description,
+                      "length": stats.first_length}
+                     if stats.first_id is not None else None)
     except Exception as exc:
         set_stats(upload_id, 0, 0, error=str(exc) or exc.__class__.__name__)
         return
 
-    if stats.records == 0:
+    if records == 0:
         set_stats(upload_id, 0, 0,
-                  error="El archivo no contiene registros FASTA")
+                  error="El archivo no contiene registros FASTA/FASTQ")
         if dest.parent == UPLOAD_DIR:
             dest.unlink(missing_ok=True)
         return
 
-    first = None
-    if stats.first_id is not None:
-        first = {
-            "id": stats.first_id or "",
-            "description": stats.first_description,
-            "length": stats.first_length,
-        }
-    set_stats(upload_id, stats.records, stats.total_bases, first)
+    set_stats(upload_id, records, total_bases, first)
 
 
 def _response(meta: dict) -> UploadResponse:
@@ -182,13 +211,15 @@ def _response(meta: dict) -> UploadResponse:
 
 @router.post("", response_model=UploadResponse)
 async def upload_fasta(file: UploadFile = File(...)) -> UploadResponse:
-    """Guarda el FASTA en disco (streaming) y devuelve un identificador
-    para analizarlo; las estadísticas llegan en segundo plano."""
+    """Guarda el FASTA/FASTQ en disco (streaming) y devuelve un
+    identificador para analizarlo; las estadísticas llegan en segundo
+    plano."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Archivo sin nombre")
 
+    kind = _upload_kind(file.filename)
     upload_id = uuid4().hex
-    dest = UPLOAD_DIR / f"{upload_id}.fasta"
+    dest = UPLOAD_DIR / f"{upload_id}.{_file_ext(kind)}"
     bytes_on_disk = 0
     sha = hashlib.sha256()
 
@@ -208,7 +239,7 @@ async def upload_fasta(file: UploadFile = File(...)) -> UploadResponse:
         dest.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="El archivo está vacío")
 
-    meta = create_upload(upload_id, "multipart", dest,
+    meta = create_upload(upload_id, kind, dest,
                          Path(file.filename).name, bytes_on_disk)
     set_checksum(upload_id, sha.hexdigest())
     threading.Thread(target=_background_stats, args=(upload_id, dest),
@@ -228,10 +259,11 @@ def chunked_init(req: ChunkedInitRequest) -> ChunkedInitResponse:
     if not req.filename.strip():
         raise HTTPException(status_code=400, detail="Archivo sin nombre")
 
+    kind = _upload_kind(req.filename)
     upload_id = uuid4().hex
-    dest = UPLOAD_DIR / f"{upload_id}.fasta"
+    dest = UPLOAD_DIR / f"{upload_id}.{_file_ext(kind)}"
     dest.touch()
-    create_upload(upload_id, "multipart", dest,
+    create_upload(upload_id, kind, dest,
                   Path(req.filename).name, 0)
     return ChunkedInitResponse(upload_id=upload_id,
                                filename=Path(req.filename).name,
@@ -312,20 +344,22 @@ def chunked_complete(upload_id: str,
 @router.post("/register", response_model=UploadResponse)
 def register_fasta(req: RegisterRequest) -> UploadResponse:
     """
-    Registra un archivo FASTA ya presente en el servidor (sin copiarlo
-    ni transmitirlo por HTTP). Recomendado para archivos de 50-100 GB:
-    se valida la ruta y las estadísticas se calculan en segundo plano.
+    Registra un archivo FASTA/FASTQ ya presente en el servidor (sin
+    copiarlo ni transmitirlo por HTTP). Recomendado para archivos de
+    50-100 GB: se valida la ruta y las estadísticas se calculan en
+    segundo plano.
     """
     if not req.path.strip():
         raise HTTPException(status_code=400, detail="Indica una ruta")
     src = check_registrable(Path(req.path))
+    kind = _upload_kind(src.name)
 
     upload_id = uuid4().hex
-    meta = create_upload(upload_id, "registered", src, src.name,
+    meta = create_upload(upload_id, kind, src, src.name,
                          bytes_on_disk=int(src.stat().st_size))
     threading.Thread(target=_background_stats, args=(upload_id, src),
                      daemon=True).start()
-    return _response(meta)
+    return _response(get_upload(upload_id))
 
 
 @router.get("/{upload_id}", response_model=UploadResponse)
@@ -335,3 +369,16 @@ def upload_status(upload_id: str) -> UploadResponse:
     if meta is None:
         raise HTTPException(status_code=404, detail="Subida no encontrada")
     return _response(meta)
+
+
+@router.get("/{upload_id}/download")
+def download_upload(upload_id: str) -> FileResponse:
+    """Descarga el archivo de una subida (SAM/VCF/FASTA/FASTQ...)."""
+    meta = get_upload(upload_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Subida no encontrada")
+    path = Path(meta["path"])
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="El archivo ya no existe")
+    return FileResponse(path, filename=meta["filename"],
+                        media_type="application/octet-stream")

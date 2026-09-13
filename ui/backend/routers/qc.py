@@ -1,3 +1,6 @@
+from pathlib import Path
+from uuid import uuid4
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
@@ -6,8 +9,9 @@ from Genoly.qc.quality import QualityAnalyzer
 from Genoly.io.fastq import FastqRecord
 from Genoly.io.fasta import FastaReader
 
+from ui.backend import jobs
 from ui.backend.datasets import get_dataset
-from ui.backend.uploads import upload_path
+from ui.backend.uploads import UPLOAD_DIR, create_upload, upload_path
 
 
 router = APIRouter(prefix="/api/qc", tags=["qc"])
@@ -27,6 +31,81 @@ class QcAnalyzeResponse(BaseModel):
     mean_length: float
     quality_mean: Optional[float] = None
     quality_by_position: Optional[List[float]] = None
+
+
+class FastqQcRequest(BaseModel):
+    upload_id: str
+    batch_size: int = 4096
+    max_position: int = 300
+
+
+class FastqProcessRequest(BaseModel):
+    upload_id: str
+    min_quality: int = 20
+    window_size: int = 5
+    min_length: int = 20
+    min_mean_quality: float = 20.0
+    max_n_ratio: float = 0.1
+
+
+class JobAccepted(BaseModel):
+    job_id: str
+    events_url: str
+    out_upload_id: Optional[str] = None
+
+
+def _job_accepted(job, out_upload_id: Optional[str] = None) -> JobAccepted:
+    return JobAccepted(
+        job_id=job.id,
+        events_url=f"/api/jobs/{job.id}/events",
+        out_upload_id=out_upload_id,
+    )
+
+
+@router.post("/fastq", response_model=JobAccepted)
+async def fastq_qc(req: FastqQcRequest) -> JobAccepted:
+    """
+    Control de calidad FastQC-like de un FASTQ subido, en streaming por
+    lotes (RAM acotada). Se ejecuta en un proceso aislado; el progreso y
+    el reporte llegan por el stream SSE de ``events_url``.
+    """
+    path = upload_path(req.upload_id)
+    job = jobs.manager.create("fastq_qc")
+    jobs.manager.submit_process(job, {
+        "kind": "fastq_qc",
+        "path": str(path),
+        "batch_size": req.batch_size,
+        "max_position": req.max_position,
+    })
+    return _job_accepted(job)
+
+
+@router.post("/fastq/process", response_model=JobAccepted)
+async def fastq_process(req: FastqProcessRequest) -> JobAccepted:
+    """
+    Preprocesamiento en streaming: trim por calidad (3') y filtro por
+    calidad media/longitud/N. Escribe el FASTQ limpio en una nueva subida
+    (``out_upload_id``) y devuelve lecturas/bases antes y después.
+    """
+    src = upload_path(req.upload_id)
+    out_id = uuid4().hex
+    out_path = UPLOAD_DIR / f"{out_id}.fastq"
+    create_upload(out_id, "fastq", out_path,
+                  f"procesado_{Path(src).name}", 0)
+
+    job = jobs.manager.create("fastq_process")
+    jobs.manager.submit_process(job, {
+        "kind": "fastq_process",
+        "path": str(src),
+        "out_path": str(out_path),
+        "out_upload_id": out_id,
+        "min_quality": req.min_quality,
+        "window_size": req.window_size,
+        "min_length": req.min_length,
+        "min_mean_quality": req.min_mean_quality,
+        "max_n_ratio": req.max_n_ratio,
+    })
+    return _job_accepted(job, out_upload_id=out_id)
 
 
 def _analyze_upload(upload_id: str) -> QcAnalyzeResponse:

@@ -28,6 +28,11 @@ class AlignmentResult:
     gaps: int
     mismatches: int
     cigar_string: Optional[str] = None
+    #: Extremos 0-based de la alineación en la referencia/query (nativo
+    #: parasail); None en la ruta Python escalar. Útiles para localizar la
+    #: coordenada de un alineamiento local dentro de un tramo mayor.
+    ref_end: Optional[int] = None
+    query_end: Optional[int] = None
 
 class GPUSequenceAligner:
     """
@@ -172,13 +177,15 @@ class GPUSequenceAligner:
                 gaps=0, mismatches=0, cigar_string='')
 
         if self.engine == 'parasail':
-            score, aligned_q, aligned_t = self._align_native(query, target)
+            score, aligned_q, aligned_t, ref_end, query_end = \
+                self._align_native(query, target)
         else:
             # Codificar secuencias
             query_encoded = self.encode_sequence(query)
             target_encoded = self.encode_sequence(target)
             score, aligned_q, aligned_t = self._smith_waterman(
                 query_encoded, target_encoded)
+            ref_end = query_end = None
 
         # Calcular métricas
         alignment_len = len(aligned_q)
@@ -200,20 +207,28 @@ class GPUSequenceAligner:
             identity_percent=identity_pct,
             gaps=gaps,
             mismatches=mismatches,
-            cigar_string=cigar
+            cigar_string=cigar,
+            ref_end=ref_end,
+            query_end=query_end,
         )
 
-    def _align_native(self, query: str, target: str) -> Tuple[float, str, str]:
+    def _align_native(self, query: str, target: str
+                      ) -> Tuple[float, str, str, Optional[int], Optional[int]]:
         """
         Smith-Waterman local con el motor nativo parasail (SIMD).
 
         Las penalizaciones y el match/mismatch se escalan x2 a enteros; el
         score se devuelve en la escala original (dividido por la escala).
+        Devuelve además los extremos 0-based (ref_end, query_end) de la
+        alineación en cada secuencia.
         """
         res = _parasail.sw_trace_scan_sat(
             query, target, self._native_open, self._native_gap,
             self._native_matrix)
-        return res.score / _NATIVE_SCALE, res.query, res.ref
+        tb = res.get_traceback()
+        return (res.score / _NATIVE_SCALE, tb.query, tb.ref,
+                int(res.end_ref) if res.pointer else None,
+                int(res.end_query) if res.pointer else None)
     
     def align_batch(self, queries: List[str], targets: List[str]) -> List[AlignmentResult]:
         """

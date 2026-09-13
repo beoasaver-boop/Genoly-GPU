@@ -77,6 +77,20 @@ export const api = {
   analyzeQc: (payload) =>
     request('/qc/analyze', { method: 'POST', body: JSON.stringify(payload) }),
 
+  fastqQc: (payload) =>
+    request('/qc/fastq', { method: 'POST', body: JSON.stringify(payload) }),
+
+  fastqProcess: (payload) =>
+    request('/qc/fastq/process', { method: 'POST', body: JSON.stringify(payload) }),
+
+  mapReads: (payload) =>
+    request('/map', { method: 'POST', body: JSON.stringify(payload) }),
+
+  callVariantsFile: (payload) =>
+    request('/variants/call-file', { method: 'POST', body: JSON.stringify(payload) }),
+
+  downloadUrl: (uploadId) => `${BASE}/upload/${uploadId}/download`,
+
   countKmers: (payload) =>
     request('/kmer/count', { method: 'POST', body: JSON.stringify(payload) }),
 
