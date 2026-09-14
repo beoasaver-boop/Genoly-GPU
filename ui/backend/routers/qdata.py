@@ -135,7 +135,8 @@ def get_clean(clean_id: str) -> dict:
 
 def _launch(kind: str, req) -> QAnalysisJobResponse:
     job = jobs.manager.create(kind)
-    jobs.manager.submit_process(job, req.model_dump(exclude_none=True))
+    jobs.manager.submit_process(
+        job, {"kind": kind, **req.model_dump(exclude_none=True)})
     return QAnalysisJobResponse(job_id=job.id,
                                 events_url=f"/api/jobs/{job.id}/events")
 

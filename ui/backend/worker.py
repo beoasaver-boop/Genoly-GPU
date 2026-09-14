@@ -345,6 +345,8 @@ def _run_qdata_clean(spec: dict, progress) -> dict:
         max_column_missingness=spec["max_column_missingness"],
         min_individuals=spec["min_individuals"],
         min_markers=spec["min_markers"],
+        min_maf=spec.get("min_maf", 0.0),
+        hwe_p=spec.get("hwe_p"),
     )
     progress({"stage": "clean", "rows": len(phenotypes),
               "markers": len(markers)})

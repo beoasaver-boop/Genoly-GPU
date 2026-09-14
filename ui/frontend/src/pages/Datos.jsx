@@ -23,6 +23,47 @@ function fmt(n) {
 
 const TYPE_TONE = { numeric: 'ok', text: 'slate', mixed: 'warn', empty: 'bad' }
 
+function Scatter({ points, labels, xLabel, yLabel, title, identity = false }) {
+  if (!points?.length) return null
+  const W = 520
+  const H = 300
+  const P = 36
+  const xs = points.map((p) => p[0])
+  const ys = points.map((p) => p[1])
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys, minX)
+  const maxY = Math.max(...ys, maxX)
+  const lo = Math.min(minX, minY)
+  const hi = Math.max(maxX, maxY)
+  const span = hi - lo || 1
+  const sx = (v) => P + ((v - lo) / span) * (W - 2 * P)
+  const sy = (v) => H - P - ((v - lo) / span) * (H - 2 * P)
+  const c = sx(lo)
+  const d = sy(hi)
+  return (
+    <div>
+      <p className="mb-2 text-xs text-ink-faint">{title}</p>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        <line x1={P} x2={W - P} y1={H - P} y2={H - P} stroke="rgb(var(--line) / 0.4)" />
+        <line x1={P} x2={P} y1={P} y2={H - P} stroke="rgb(var(--line) / 0.4)" />
+        {identity && (
+          <line x1={c} y1={d} x2={sx(hi)} y2={sy(lo)} stroke="rgb(var(--line) / 0.5)" strokeDasharray="4 4" />
+        )}
+        {points.map((p, i) => (
+          <circle key={i} cx={sx(p[0])} cy={sy(p[1])} r={3.4}
+            fill="rgb(var(--accent))" fillOpacity={0.8}
+            style={{ filter: 'drop-shadow(0 0 3px rgb(var(--accent) / 0.5))' }} />
+        ))}
+        <text x={W / 2} y={H - 4} textAnchor="middle" className="font-mono"
+          style={{ fill: 'rgb(var(--ink-faint))', fontSize: 10 }}>{xLabel}</text>
+        <text x={12} y={H / 2} textAnchor="middle" transform={`rotate(-90 12 ${H / 2})`}
+          className="font-mono" style={{ fill: 'rgb(var(--ink-faint))', fontSize: 10 }}>{yLabel}</text>
+      </svg>
+    </div>
+  )
+}
+
 export default function Datos() {
   const inputRef = useRef(null)
   const { qdata, setQdata } = useQData()
@@ -36,11 +77,18 @@ export default function Datos() {
     max_column_missingness: 1.0,
     min_individuals: 5,
     min_markers: 2,
+    min_maf: 0.0,
+    hwe_p: '',
   })
   const [running, setRunning] = useState(false)
   const [cleanResult, setCleanResult] = useState(null)
   const [progress, setProgress] = useState(null)
   const [error, setError] = useState(null)
+  const [cv, setCv] = useState({ running: false, result: null, error: null })
+  const [cvParams, setCvParams] = useState({ n_folds: 5, n_repeats: 1 })
+  const [gwas, setGwas] = useState({ running: false, result: null, error: null })
+  const [gwasMaf, setGwasMaf] = useState(0.05)
+  const [kin, setKin] = useState({ running: false, result: null, error: null })
 
   const uploadFile = async (file) => {
     if (file.size > CHUNK_THRESHOLD) {
@@ -126,6 +174,7 @@ export default function Datos() {
       const job = await api.qdataClean({
         upload_id: upload.upload_id,
         ...options,
+        hwe_p: options.hwe_p ? Number(options.hwe_p) : null,
       })
       const res = await api.jobEvents(job.job_id, { onProgress: (p) => setProgress(p) })
       const matrix = await api.qdataGet(res.clean_id)
@@ -140,6 +189,49 @@ export default function Datos() {
   }
 
   const sendTo = (path) => navigate(path)
+
+  const runAnalysis = async (fn, payload, setState, setProgressFn) => {
+    setState((s) => ({ ...s, running: true, error: null, result: null }))
+    try {
+      const job = await fn(payload)
+      const res = await api.jobEvents(job.job_id, {
+        onProgress: (p) => setProgressFn?.(p),
+      })
+      setState({ running: false, result: res, error: null })
+    } catch (e) {
+      setState((s) => ({ ...s, running: false, error: e.message }))
+    }
+  }
+
+  const runCv = () => {
+    if (!qdata) return
+    runAnalysis(api.qdataCrossval, {
+      phenotypes: qdata.phenotypes,
+      genotypes: qdata.genotypes,
+      kinship: 'vanraden',
+      n_folds: cvParams.n_folds,
+      n_repeats: cvParams.n_repeats,
+      seed: 0,
+    }, setCv)
+  }
+
+  const runGwas = () => {
+    if (!qdata) return
+    runAnalysis(api.qdataGwas, {
+      phenotypes: qdata.phenotypes,
+      genotypes: qdata.genotypes,
+      kinship: 'vanraden',
+      min_maf: gwasMaf,
+    }, setGwas)
+  }
+
+  const runKin = () => {
+    if (!qdata) return
+    runAnalysis(api.qdataKinship, {
+      genotypes: qdata.genotypes,
+      kinship: 'vanraden',
+    }, setKin)
+  }
 
   const columns = preview?.columns ?? []
   const maxMissing = Math.max(...columns.map((c) => c.missing_pct), 0)
@@ -216,6 +308,27 @@ export default function Datos() {
                   onChange={(e) => setOptions({ ...options, min_markers: Number(e.target.value) })} />
               </div>
             </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">MAF mín. (0–0.5)</label>
+                <input type="number" min={0} max={0.5} step={0.01} className="input"
+                  value={options.min_maf}
+                  onChange={(e) => setOptions({ ...options, min_maf: Number(e.target.value) })} />
+              </div>
+              <div>
+                <label className="label">HWE (p mín.)</label>
+                <select className="input" value={options.hwe_p}
+                  onChange={(e) => setOptions({ ...options, hwe_p: e.target.value })}>
+                  <option value="">Ninguno</option>
+                  <option value="0.05">0.05</option>
+                  <option value="0.01">0.01</option>
+                  <option value="0.001">0.001</option>
+                </select>
+              </div>
+            </div>
+            <p className="mt-1 text-[10px] text-ink-faint">
+              MAF = frecuencia alélica menor; HWE = equilibrio de Hardy-Weinberg. Descartan marcadores de baja calidad.
+            </p>
 
             <button className="btn-primary mt-3 w-full" onClick={run} disabled={running || !upload}>
               <IconPlay className="h-4 w-4" />
@@ -233,21 +346,175 @@ export default function Datos() {
             )}
           </Card>
 
-          {cleanResult && (
-            <Card title="Enviar al análisis" subtitle="La matriz limpia está lista"
-              icon={<IconTarget className="h-5 w-5" />}>
-              <button className="btn-primary w-full" onClick={() => sendTo('/quantitative')}>
-                Enviar a Modelos mixtos
-              </button>
-              <button className="btn-ghost mt-2 w-full" onClick={() => sendTo('/gblup')}>
-                Enviar a GBLUP
-              </button>
-              {qdata?.source && (
+          {qdata && (
+            <>
+              <Card title="Enviar al análisis" subtitle="La matriz limpia está lista"
+                icon={<IconTarget className="h-5 w-5" />}>
+                <button className="btn-primary w-full" onClick={() => sendTo('/quantitative')}>
+                  Enviar a Modelos mixtos
+                </button>
+                <button className="btn-ghost mt-2 w-full" onClick={() => sendTo('/gblup')}>
+                  Enviar a GBLUP
+                </button>
                 <p className="mt-2 text-[11px] text-ink-faint">
                   En sesión: <span className="font-mono text-accent-glow">{qdata.source}</span>
                 </p>
-              )}
-            </Card>
+              </Card>
+
+              <Card title="Validación cruzada" subtitle="Exactitud de la predicción GBLUP (K-fold)"
+                icon={<IconTarget className="h-5 w-5" />}>
+                <div className="flex items-end gap-3">
+                  <div>
+                    <label className="label">Pliegues</label>
+                    <input type="number" min={2} className="input w-24" value={cvParams.n_folds}
+                      onChange={(e) => setCvParams({ ...cvParams, n_folds: Number(e.target.value) })} />
+                  </div>
+                  <div>
+                    <label className="label">Repeticiones</label>
+                    <input type="number" min={1} className="input w-24" value={cvParams.n_repeats}
+                      onChange={(e) => setCvParams({ ...cvParams, n_repeats: Number(e.target.value) })} />
+                  </div>
+                  <button className="btn-primary" onClick={runCv} disabled={cv.running}>
+                    <IconPlay className="h-4 w-4" />
+                    {cv.running ? 'Validando…' : 'Validar'}
+                  </button>
+                </div>
+                {cv.error && (
+                  <p className="mt-2 rounded-lg border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">{cv.error}</p>
+                )}
+                {cv.result && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <dt className="text-ink-faint">Correlación r</dt>
+                        <dd className="font-mono text-accent-glow">{cv.result.mean_r} ± {cv.result.r_sd}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-ink-faint">RMSE</dt>
+                        <dd className="font-mono">{cv.result.mean_rmse}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-ink-faint">Exactitud</dt>
+                        <dd className="font-mono">{cv.result.mean_accuracy ?? '—'}</dd>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <Scatter points={cv.result.per_individual.map((p) => [p.obs, p.pred])}
+                        xLabel="observado" yLabel="predicho" title="Predicho vs observado" identity />
+                    </div>
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="table-base min-w-[22rem]">
+                        <thead>
+                          <tr><th>Pliegue</th><th>Rep.</th><th className="text-right">r</th><th className="text-right">RMSE</th><th className="text-right">Exactitud</th><th className="text-right">n val</th></tr>
+                        </thead>
+                        <tbody>
+                          {cv.result.per_fold.map((f, i) => (
+                            <tr key={i}>
+                              <td className="font-mono">{f.fold}</td>
+                              <td className="font-mono">{f.repeat}</td>
+                              <td className="text-right font-mono">{f.r}</td>
+                              <td className="text-right font-mono">{f.rmse}</td>
+                              <td className="text-right font-mono">{f.accuracy ?? '—'}</td>
+                              <td className="text-right font-mono">{f.n_val}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              <Card title="GWAS" subtitle="Asociación de marcador único (EMMAX)"
+                icon={<IconPulse className="h-5 w-5" />}>
+                <div className="flex items-end gap-3">
+                  <div>
+                    <label className="label">MAF mín.</label>
+                    <input type="number" min={0} max={0.5} step={0.01} className="input w-24"
+                      value={gwasMaf} onChange={(e) => setGwasMaf(Number(e.target.value))} />
+                  </div>
+                  <button className="btn-primary" onClick={runGwas} disabled={gwas.running}>
+                    <IconPlay className="h-4 w-4" />
+                    {gwas.running ? 'Analizando…' : 'Ejecutar GWAS'}
+                  </button>
+                </div>
+                {gwas.error && (
+                  <p className="mt-2 rounded-lg border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">{gwas.error}</p>
+                )}
+                {gwas.result && (
+                  <div className="mt-3">
+                    <div className="mb-2 grid grid-cols-3 gap-2 text-xs">
+                      <div><dt className="text-ink-faint">Marcadores</dt><dd className="font-mono">{fmt(gwas.result.n_tested)}</dd></div>
+                      <div><dt className="text-ink-faint">h² nulo</dt><dd className="font-mono">{gwas.result.heritability}</dd></div>
+                      <div><dt className="text-ink-faint">Asociados</dt><dd className="font-mono">{gwas.result.top_hits.length}</dd></div>
+                    </div>
+                    {gwas.result.manhattan_svg && (
+                      <div className="rounded-lg border border-line/30 overflow-x-auto"
+                        dangerouslySetInnerHTML={{ __html: gwas.result.manhattan_svg }} />
+                    )}
+                    {gwas.result.top_hits.length > 0 && (
+                      <div className="mt-2 overflow-x-auto">
+                        <table className="table-base min-w-[24rem]">
+                          <thead>
+                            <tr><th>Marcador</th><th className="text-right">MAF</th><th className="text-right">Efecto</th><th className="text-right">p</th><th className="text-right">-log10</th></tr>
+                          </thead>
+                          <tbody>
+                            {gwas.result.top_hits.slice(0, 20).map((m, i) => (
+                              <tr key={i}>
+                                <td className="font-mono text-accent-glow">{m.index}</td>
+                                <td className="text-right font-mono">{m.maf}</td>
+                                <td className="text-right font-mono">{m.beta}</td>
+                                <td className="text-right font-mono">{m.p.toExponential(2)}</td>
+                                <td className="text-right font-mono">{m.neglogp}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
+
+              <Card title="Parentesco y estructura" subtitle="GRM, PCA poblacional y pares relacionados"
+                icon={<IconStack className="h-5 w-5" />}>
+                <button className="btn-primary w-full" onClick={runKin} disabled={kin.running}>
+                  <IconPlay className="h-4 w-4" />
+                  {kin.running ? 'Calculando…' : 'Analizar parentesco'}
+                </button>
+                {kin.error && (
+                  <p className="mt-2 rounded-lg border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">{kin.error}</p>
+                )}
+                {kin.result && (
+                  <div className="mt-3 space-y-3">
+                    {kin.result.heatmap_svg && (
+                      <div className="rounded-lg border border-line/30 overflow-x-auto"
+                        dangerouslySetInnerHTML={{ __html: kin.result.heatmap_svg }} />
+                    )}
+                    <Scatter points={kin.result.pca} xLabel="PC1" yLabel="PC2"
+                      title="Estructura poblacional (PCA de la GRM)" />
+                    {kin.result.top_pairs.length > 0 && (
+                      <div>
+                        <p className="mb-1 text-xs text-ink-faint">Pares más relacionados</p>
+                        <table className="table-base min-w-[18rem]">
+                          <thead><tr><th>#</th><th className="text-right">i</th><th className="text-right">j</th><th className="text-right">Parentesco</th></tr></thead>
+                          <tbody>
+                            {kin.result.top_pairs.slice(0, 10).map((p, i) => (
+                              <tr key={i}>
+                                <td className="font-mono text-ink-faint">{i + 1}</td>
+                                <td className="text-right font-mono">{p.i + 1}</td>
+                                <td className="text-right font-mono">{p.j + 1}</td>
+                                <td className="text-right font-mono text-accent-glow">{p.value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
+            </>
           )}
         </div>
 
