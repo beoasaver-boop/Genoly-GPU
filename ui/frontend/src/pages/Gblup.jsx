@@ -1,9 +1,10 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Card, StatCard, Badge, Bar, PageHeader } from '../components/ui.jsx'
 import PreprocessReport from '../components/PreprocessReport.jsx'
 import { makeSampleData, parseQuantData } from '../quantgen.js'
 import { parseFileGrid, preprocessGrid } from '../tabular.js'
+import { useQData, qdataToText } from '../qdata.jsx'
 import {
   IconTarget,
   IconList,
@@ -20,6 +21,7 @@ const SAMPLE = makeSampleData()
 export default function Gblup() {
   const fileInputRef = useRef(null)
   const [dataText, setDataText] = useState(SAMPLE)
+  const { qdata } = useQData()
   const [kinshipMethod, setKinshipMethod] = useState('vanraden')
   const [varGenetic, setVarGenetic] = useState('')
   const [varResidual, setVarResidual] = useState('')
@@ -29,6 +31,20 @@ export default function Gblup() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // si hay datos limpios preparados en la página Datos, usarlos
+  useEffect(() => {
+    if (qdata) {
+      setDataText(qdataToText(qdata))
+      setReport({
+        final_rows: qdata.phenotypes.length,
+        final_markers: qdata.genotypes[0]?.length ?? 0,
+        imputed_cells: qdata.report?.imputed_cells ?? 0,
+        source: qdata.source,
+        clean: true,
+      })
+    }
+  }, [qdata])
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -106,7 +122,10 @@ export default function Gblup() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4">
           <Card title="Datos de entrada" icon={<IconList className="h-5 w-5" />}>
-            <label className="label">Individuos — formato: fenotipo,dosis_1,dosis_2,…</label>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="label">Individuos — formato: fenotipo,dosis_1,dosis_2,…</span>
+              {qdata && <Badge tone="ok">Datos: {qdata.source}</Badge>}
+            </div>
             <textarea
               className="input h-72 font-mono"
               value={dataText}

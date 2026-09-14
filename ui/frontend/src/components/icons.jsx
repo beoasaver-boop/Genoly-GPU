@@ -210,3 +210,9 @@ export const IconChart = (p) => (
     <path d="M4 20V10M10 20V4M16 20v-8M21 20H3" />
   </Icon>
 )
+
+export const IconChevron = (p) => (
+  <Icon {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Icon>
+)

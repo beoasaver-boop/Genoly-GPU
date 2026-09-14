@@ -38,7 +38,7 @@ from Genoly.core.gpu_setup import GpuSetup
 
 from ui.backend.routers import (
     device, qc, kmer, variants, upload, quantitative, gblup, jobs, dataset,
-    map as map_router, downstream, annotation, report,
+    map as map_router, downstream, annotation, report, qdata,
 )
 
 logger = logging.getLogger("genoly.ui")
@@ -102,6 +102,7 @@ app.include_router(map_router.router)
 app.include_router(downstream.router)
 app.include_router(annotation.router)
 app.include_router(report.router)
+app.include_router(qdata.router)
 
 
 @app.get("/api/health")

@@ -98,6 +98,16 @@ export const api = {
   buildReport: (payload) =>
     request('/report', { method: 'POST', body: JSON.stringify(payload) }),
 
+  qdataPreview: (uploadId) => request(`/qdata/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ upload_id: uploadId }),
+  }),
+
+  qdataClean: (payload) =>
+    request('/qdata/clean', { method: 'POST', body: JSON.stringify(payload) }),
+
+  qdataGet: (cleanId) => request(`/qdata/${cleanId}`),
+
   downloadUrl: (uploadId) => `${BASE}/upload/${uploadId}/download`,
 
   countKmers: (payload) =>

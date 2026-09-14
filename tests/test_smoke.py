@@ -583,6 +583,49 @@ class TestPreprocess(unittest.TestCase):
         with self.assertRaises(ValueError):
             prepare_quantitative_data(path)
 
+    def test_clean_grid_robusto(self):
+        from Genoly.quantitative.preprocess import (
+            clean_grid, load_grid, profile_grid, scan_grid_stats,
+        )
+        path = os.path.join(self.tmpdir, 'sucio.csv')
+        with open(path, 'w') as fh:
+            fh.write('id;feno;m1;m2;m3;nota\n'
+                     'A1;12,5;1;0;2;buena\n'
+                     'A2;11;0;;1;regular\n'
+                     'A3;;2;1;;mala\n'
+                     'A4;13,2;;1;0;\n'
+                     'A5;10,8;1;2;1;\n'
+                     'A6;14;0;1;2;\n')
+        stats = scan_grid_stats(path)
+        self.assertEqual(stats['rows'], 6)
+        self.assertTrue(stats['header_detected'])
+        grid = load_grid(path)
+        prof = profile_grid(grid)
+        names = {c['name']: c for c in prof['columns']}
+        self.assertEqual(names['m2']['type'], 'mixed')
+        self.assertGreater(names['m2']['missing_pct'], 0)
+        self.assertEqual(names['nota']['type'], 'text')
+
+        pheno, geno, markers, rep = clean_grid(
+            grid, phenotype_col=1, impute_method='media',
+            max_column_missingness=0.5, min_individuals=5, min_markers=2)
+        self.assertEqual(rep['final_rows'], 5)
+        self.assertEqual(rep['final_markers'], 3)
+        self.assertEqual(rep['phenotype_column'], 'feno')
+        self.assertEqual(rep['imputed_cells'], 2)
+        self.assertIn('nota', [dc['name'] for dc in rep['dropped_columns']])
+        self.assertEqual(markers, ['m1', 'm2', 'm3'])
+
+    def test_clean_grid_validationes(self):
+        from Genoly.quantitative.preprocess import clean_grid
+        grid = [['id', 'feno', 'm1'], ['a', '1', '0'], ['b', '2', '1']]
+        with self.assertRaises(ValueError):
+            clean_grid(grid, phenotype_col=0, min_individuals=5)
+        with self.assertRaises(ValueError):
+            clean_grid(grid, phenotype_col=99)
+        with self.assertRaises(ValueError):
+            clean_grid(grid, phenotype_col=1, impute_method='xxx')
+
 
 class TestAlignment(unittest.TestCase):
     """Alineador Smith-Waterman (motor nativo parasail si está disponible)."""

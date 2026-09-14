@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
 import { ThemeSwitcher, DayNightToggle } from '../themes.jsx'
 import DnaBackdrop from './DnaBackdrop.jsx'
 import FrutigerBackdrop from './FrutigerBackdrop.jsx'
@@ -14,6 +14,7 @@ import {
   IconTarget,
   IconTag,
   IconNote,
+  IconChevron,
 } from './icons.jsx'
 
 const groups = [
@@ -25,7 +26,7 @@ const groups = [
     ],
   },
   {
-    label: 'Análisis',
+    label: 'Genómica',
     items: [
       { to: '/qc', label: 'Control de calidad', icon: <IconFlask className="h-5 w-5" /> },
       { to: '/fastq', label: 'FASTQ (lecturas)', icon: <IconScissors className="h-5 w-5" /> },
@@ -35,11 +36,19 @@ const groups = [
       { to: '/downstream', label: 'Downstream', icon: <IconChart className="h-5 w-5" /> },
       { to: '/annotation', label: 'Anotación', icon: <IconTag className="h-5 w-5" /> },
       { to: '/report', label: 'Reporte', icon: <IconNote className="h-5 w-5" /> },
-      { to: '/quantitative', label: 'Genética cuantitativa', icon: <IconChart className="h-5 w-5" /> },
+    ],
+  },
+  {
+    label: 'Genética Cuantitativa',
+    items: [
+      { to: '/datos', label: 'Datos y limpieza', icon: <IconTag className="h-5 w-5" /> },
+      { to: '/quantitative', label: 'Modelos mixtos', icon: <IconChart className="h-5 w-5" /> },
       { to: '/gblup', label: 'GBLUP', icon: <IconTarget className="h-5 w-5" /> },
     ],
   },
 ]
+
+const DEFAULT_OPEN = groups.map((g) => g.label)
 
 function NavItem({ item, onNavigate }) {
   return (
@@ -63,8 +72,28 @@ function NavItem({ item, onNavigate }) {
 
 export default function Layout({ children }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [openGroups, setOpenGroups] = useState(() => new Set(DEFAULT_OPEN))
+  const location = useLocation()
+
+  // al navegar, abre el grupo de la ruta activa
+  useEffect(() => {
+    const group = groups.find((g) =>
+      g.items.some((item) => item.to === location.pathname))
+    if (group && !openGroups.has(group.label)) {
+      setOpenGroups((prev) => new Set(prev).add(group.label))
+    }
+  }, [location.pathname, openGroups])
 
   const closeMenu = () => setMenuOpen(false)
+
+  const toggleGroup = (label) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(label)) next.delete(label)
+      else next.add(label)
+      return next
+    })
+  }
 
   return (
     <div className="relative flex min-h-screen">
@@ -137,22 +166,37 @@ export default function Layout({ children }) {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-5 overflow-y-auto px-4 py-2">
-          {groups.map((g) => (
-            <div key={g.label}>
-              <div className="mb-2 flex items-center gap-2 px-3">
-                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-ink-faint">
-                  {g.label}
-                </span>
-                <span className="h-px flex-1 bg-line/40" />
+        <nav className="flex-1 space-y-4 overflow-y-auto px-4 py-2">
+          {groups.map((g) => {
+            const open = openGroups.has(g.label)
+            return (
+              <div key={g.label}>
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g.label)}
+                  className="group mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-panel-2/60"
+                  aria-expanded={open}
+                >
+                  <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-ink-faint transition-colors group-hover:text-ink">
+                    {g.label}
+                  </span>
+                  <span className="h-px flex-1 bg-line/40" />
+                  <IconChevron
+                    className={`h-3.5 w-3.5 text-ink-faint transition-transform duration-200 ${
+                      open ? 'rotate-0' : '-rotate-90'
+                    }`}
+                  />
+                </button>
+                {open && (
+                  <div className="space-y-1">
+                    {g.items.map((item) => (
+                      <NavItem key={item.to} item={item} onNavigate={closeMenu} />
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="space-y-1">
-                {g.items.map((item) => (
-                  <NavItem key={item.to} item={item} onNavigate={closeMenu} />
-                ))}
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </nav>
 
         <div className="space-y-4 border-t border-line/40 p-4">

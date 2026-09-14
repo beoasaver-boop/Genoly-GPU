@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from Genoly.io.fasta import FastaReader
 from Genoly.io.fastq import FastqReader
+from Genoly.quantitative.preprocess import scan_grid_stats
 
 from ui.backend.uploads import (
     UPLOAD_DIR,
@@ -49,18 +50,25 @@ MAX_CHUNK_PUT = 256 * 1024 * 1024
 
 _FASTA_SUFFIXES = (".fasta", ".fa", ".fna", ".txt")
 _FASTQ_SUFFIXES = (".fastq", ".fq")
+_TABULAR_SUFFIXES = (".csv", ".tsv", ".xlsx", ".xls")
 
 
 def _upload_kind(filename: str) -> str:
-    """Tipo de subida según la extensión: 'fasta' o 'fastq'."""
+    """Tipo de subida según la extensión: 'fastq', 'tabular' o 'fasta'."""
     suffix = Path(filename).suffix.lower()
     if suffix in _FASTQ_SUFFIXES:
         return "fastq"
+    if suffix in _TABULAR_SUFFIXES:
+        return "tabular"
     return "fasta"
 
 
 def _file_ext(kind: str) -> str:
-    return "fastq" if kind == "fastq" else "fasta"
+    if kind == "fastq":
+        return "fastq"
+    if kind == "tabular":
+        return "csv"
+    return "fasta"
 
 
 async def _iter_chunks(file: UploadFile,
@@ -169,6 +177,11 @@ def _background_stats(upload_id: str, dest: Path) -> None:
             first = ({"id": stats.first_id or "", "description": None,
                       "length": stats.first_length}
                      if stats.first_id is not None else None)
+        elif kind == "tabular":
+            stats = scan_grid_stats(dest)
+            records = stats["rows"]
+            total_bases = records * stats["columns"]
+            first = None
         else:
             stats = FastaReader(dest).scan_stats()
             records = stats.records

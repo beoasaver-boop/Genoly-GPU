@@ -327,6 +327,50 @@ def _run_report(spec: dict, progress) -> dict:
     return out
 
 
+def _run_qdata_clean(spec: dict, progress) -> dict:
+    """Limpia/imputa/filtra una matriz CSV/Excel sucia y guarda el JSON."""
+    from Genoly.quantitative.preprocess import clean_grid, load_grid
+    from ui.backend.uploads import set_bytes, set_stats
+    import json
+    import os
+
+    progress({"stage": "load"})
+    grid = load_grid(spec["path"])
+    progress({"stage": "load", "rows": len(grid)})
+
+    phenotypes, genotypes, markers, report = clean_grid(
+        grid,
+        phenotype_col=spec["phenotype_col"],
+        impute_method=spec["impute_method"],
+        max_column_missingness=spec["max_column_missingness"],
+        min_individuals=spec["min_individuals"],
+        min_markers=spec["min_markers"],
+    )
+    progress({"stage": "clean", "rows": len(phenotypes),
+              "markers": len(markers)})
+
+    payload = {
+        "phenotypes": phenotypes,
+        "genotypes": genotypes,
+        "markers": markers,
+        "report": report,
+    }
+    with open(spec["out_path"], "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+    out_id = spec.get("out_upload_id")
+    if out_id:
+        try:
+            set_bytes(out_id, int(os.path.getsize(spec["out_path"])))
+            set_stats(out_id, len(phenotypes),
+                      len(phenotypes) * len(markers), None)
+        except Exception:
+            pass
+
+    return {"report": report, "clean_id": out_id,
+            "n_individuals": len(phenotypes), "n_markers": len(markers)}
+
+
 def _crash_test(spec: dict) -> None:
     """Simula distintos tipos de muerte del trabajador (solo tests)."""
     mode = spec.get("mode", "raise")
@@ -366,6 +410,8 @@ def run_job(spec: dict, conn: "mp.connection.Connection") -> None:
             result = _run_annotation(spec, _progress(conn))
         elif kind == "report":
             result = _run_report(spec, _progress(conn))
+        elif kind == "qdata_clean":
+            result = _run_qdata_clean(spec, _progress(conn))
         elif kind == "crash_test":
             _crash_test(spec)
             result = {"ok": True}
