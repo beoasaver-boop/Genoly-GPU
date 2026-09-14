@@ -92,6 +92,12 @@ export const api = {
   runDownstream: (payload) =>
     request('/downstream', { method: 'POST', body: JSON.stringify(payload) }),
 
+  annotateVariants: (payload) =>
+    request('/annotation', { method: 'POST', body: JSON.stringify(payload) }),
+
+  buildReport: (payload) =>
+    request('/report', { method: 'POST', body: JSON.stringify(payload) }),
+
   downloadUrl: (uploadId) => `${BASE}/upload/${uploadId}/download`,
 
   countKmers: (payload) =>

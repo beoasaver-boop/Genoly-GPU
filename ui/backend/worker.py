@@ -275,6 +275,58 @@ def _run_downstream(spec: dict, progress) -> dict:
         on_progress=progress)
 
 
+def _run_annotation(spec: dict, progress) -> dict:
+    """Anota variantes con genes/regiones/GO desde un GFF/GTF."""
+    from Genoly.annotation.annotator import Annotator, summarize_go
+    an = Annotator()
+    n_features = an.load(spec["gff_path"], on_progress=progress)
+    res = an.annotate_variants(spec["variants"], on_progress=progress)
+    res["features_loaded"] = n_features
+    res["go_summary"] = summarize_go(res["go_terms"])
+    return res
+
+
+def _run_report(spec: dict, progress) -> dict:
+    """Genera heatmap y/o volcano SVG + reporte Markdown/JSON."""
+    from Genoly.report.plots import build_report, heatmap_svg, volcano_svg
+    from ui.backend.uploads import set_bytes, set_stats
+    import os
+
+    out: dict = {}
+    if spec.get("matrix"):
+        progress({"stage": "heatmap"})
+        out["heatmap_svg"] = heatmap_svg(
+            spec["matrix"], spec.get("row_labels"), spec.get("col_labels"),
+            title=spec.get("title", "Heatmap"))
+    if spec.get("fold_changes") and spec.get("p_values"):
+        progress({"stage": "volcano"})
+        out["volcano_svg"] = volcano_svg(
+            spec["fold_changes"], spec["p_values"],
+            fc_threshold=spec.get("fc_threshold", 1.0),
+            p_threshold=spec.get("p_threshold", 0.05),
+            title=spec.get("title", "Volcano plot"))
+
+    report = build_report(spec.get("title", "Reporte de análisis"),
+                          spec.get("sections", {}))
+    out["markdown"] = report.markdown
+    out["report_json"] = report.json
+    out["sections"] = report.sections
+
+    # guarda el markdown como subida descargable
+    md_id = spec.get("md_upload_id")
+    if spec.get("md_path"):
+        with open(spec["md_path"], "w", encoding="utf-8") as fh:
+            fh.write(report.markdown)
+        if md_id:
+            try:
+                set_bytes(md_id, int(os.path.getsize(spec["md_path"])))
+                set_stats(md_id, 1, 0, None)
+            except Exception:
+                pass
+            out["md_upload_id"] = md_id
+    return out
+
+
 def _crash_test(spec: dict) -> None:
     """Simula distintos tipos de muerte del trabajador (solo tests)."""
     mode = spec.get("mode", "raise")
@@ -310,6 +362,10 @@ def run_job(spec: dict, conn: "mp.connection.Connection") -> None:
             result = _run_variant_call(spec, _progress(conn))
         elif kind == "downstream":
             result = _run_downstream(spec, _progress(conn))
+        elif kind == "annotation":
+            result = _run_annotation(spec, _progress(conn))
+        elif kind == "report":
+            result = _run_report(spec, _progress(conn))
         elif kind == "crash_test":
             _crash_test(spec)
             result = {"ok": True}

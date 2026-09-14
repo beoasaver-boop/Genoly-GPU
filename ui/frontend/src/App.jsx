@@ -7,6 +7,8 @@ import Fastq from './pages/Fastq.jsx'
 import Kmer from './pages/Kmer.jsx'
 import Map from './pages/Map.jsx'
 import Downstream from './pages/Downstream.jsx'
+import Annotation from './pages/Annotation.jsx'
+import Report from './pages/Report.jsx'
 import Variants from './pages/Variants.jsx'
 import Quantitative from './pages/Quantitative.jsx'
 import Gblup from './pages/Gblup.jsx'
@@ -22,6 +24,8 @@ export default function App() {
         <Route path="/kmer" element={<Kmer />} />
         <Route path="/map" element={<Map />} />
         <Route path="/downstream" element={<Downstream />} />
+        <Route path="/annotation" element={<Annotation />} />
+        <Route path="/report" element={<Report />} />
         <Route path="/variants" element={<Variants />} />
         <Route path="/quantitative" element={<Quantitative />} />
         <Route path="/gblup" element={<Gblup />} />
