@@ -233,12 +233,65 @@ def profile_grid(grid: List[List[Optional[str]]]) -> dict:
     }
 
 
+def _marker_qc(genotypes: List[List[float]],
+               min_maf: float = 0.0,
+               hwe_p: Optional[float] = None
+               ) -> Tuple[List[int], List[int], List[int]]:
+    """
+    Filtros de calidad por marcador: MAF y equilibrio de Hardy-Weinberg.
+
+    Args:
+        genotypes: Matriz de dosis (n x m) ya imputada.
+        min_maf: Frecuencia alélica menor mínima (0-0.5).
+        hwe_p: Umbral de p-valor del test chi-cuadrado de HWE; los
+            marcadores con p menor se descartan.
+
+    Returns:
+        Tupla (índices_conservados, índices_baja_maf, índices_hwe).
+    """
+    if min_maf < 0 or min_maf > 0.5:
+        raise ValueError("min_maf debe estar en [0, 0.5]")
+    m = len(genotypes[0])
+    keep = []
+    low_maf = []
+    bad_hwe = []
+    for j in range(m):
+        col = [row[j] for row in genotypes]
+        n = len(col)
+        freq = sum(col) / (2 * n)
+        maf = min(freq, 1.0 - freq)
+        if maf < min_maf:
+            low_maf.append(j)
+            continue
+        if hwe_p is not None:
+            n11 = sum(1 for v in col if v >= 1.999)
+            n01 = sum(1 for v in col if 0.999 < v < 1.999)
+            n00 = n - n11 - n01
+            p = (2 * n00 + n01) / (2 * n)
+            exp00 = n * p * p
+            exp01 = 2 * n * p * (1 - p)
+            exp11 = n * (1 - p) ** 2
+            chi2 = 0.0
+            for o, e in zip((n00, n01, n11), (exp00, exp01, exp11)):
+                if e > 1e-9:
+                    chi2 += (o - e) ** 2 / e
+            from scipy import stats as sps
+            p_hwe = float(sps.chi2.sf(chi2, 1))
+            if p_hwe < hwe_p:
+                bad_hwe.append(j)
+                continue
+        keep.append(j)
+    return keep, low_maf, bad_hwe
+
+
 def clean_grid(grid: List[List[Optional[str]]],
                phenotype_col: int = 0,
                impute_method: str = "media",
                max_column_missingness: float = 1.0,
                min_individuals: int = 5,
                min_markers: int = 2,
+               min_maf: float = 0.0,
+               hwe_p: Optional[float] = None,
                ) -> Tuple[List[float], List[List[float]], List[str], dict]:
     """
     Limpieza robusta de una matriz sucia para los modelos cuantitativos.
@@ -346,7 +399,26 @@ def clean_grid(grid: List[List[Optional[str]]],
                 row[j] = fill
                 imputed_cells += 1
 
-    markers = [column_names[j] for j in kept_cols if j != phenotype_col]
+    # QC de marcadores: MAF y equilibrio de Hardy-Weinberg
+    keep_idx, low_maf_idx, hwe_idx = _marker_qc(
+        genotypes, min_maf=min_maf, hwe_p=hwe_p)
+    dropped_maf = [column_names[kept_cols[k + 1]]
+                   for k in low_maf_idx]
+    dropped_hwe = [column_names[kept_cols[k + 1]]
+                   for k in hwe_idx]
+    # subconjunto de marcadores conservados
+    kept_marker_positions = keep_idx
+    genotypes = [[row[k] for k in kept_marker_positions]
+                 for row in genotypes]
+    n_markers = len(genotypes[0])
+    markers = [column_names[kept_cols[k + 1]]
+               for k in kept_marker_positions]
+
+    if n_markers < min_markers:
+        raise ValueError(
+            f"Tras la limpieza quedan {n_markers} marcadores; "
+            f"se necesitan al menos {min_markers}")
+
     report = {
         "rows_read": rows_read,
         "header_detected": header_detected,
@@ -358,6 +430,8 @@ def clean_grid(grid: List[List[Optional[str]]],
         "final_rows": len(phenotypes),
         "final_markers": n_markers,
         "phenotype_column": column_names[phenotype_col],
+        "dropped_by_maf": dropped_maf,
+        "dropped_by_hwe": dropped_hwe,
     }
     return phenotypes, genotypes, markers, report
 

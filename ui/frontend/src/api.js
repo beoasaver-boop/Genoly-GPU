@@ -108,6 +108,15 @@ export const api = {
 
   qdataGet: (cleanId) => request(`/qdata/${cleanId}`),
 
+  qdataCrossval: (payload) =>
+    request('/qdata/crossval', { method: 'POST', body: JSON.stringify(payload) }),
+
+  qdataGwas: (payload) =>
+    request('/qdata/gwas', { method: 'POST', body: JSON.stringify(payload) }),
+
+  qdataKinship: (payload) =>
+    request('/qdata/kinship', { method: 'POST', body: JSON.stringify(payload) }),
+
   downloadUrl: (uploadId) => `${BASE}/upload/${uploadId}/download`,
 
   countKmers: (payload) =>

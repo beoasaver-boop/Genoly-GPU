@@ -371,6 +371,34 @@ def _run_qdata_clean(spec: dict, progress) -> dict:
             "n_individuals": len(phenotypes), "n_markers": len(markers)}
 
 
+def _run_crossval(spec: dict, progress) -> dict:
+    from Genoly.quantitative.crossval import crossval
+    return crossval(
+        spec["phenotypes"], spec["genotypes"],
+        kinship=spec.get("kinship", "vanraden"),
+        n_folds=spec.get("n_folds", 5),
+        n_repeats=spec.get("n_repeats", 1),
+        seed=spec.get("seed", 0),
+        on_progress=progress)
+
+
+def _run_gwas(spec: dict, progress) -> dict:
+    from Genoly.quantitative.gwas import gwas
+    return gwas(
+        spec["phenotypes"], spec["genotypes"],
+        kinship=spec.get("kinship", "vanraden"),
+        min_maf=spec.get("min_maf", 0.01),
+        on_progress=progress)
+
+
+def _run_kinship(spec: dict, progress) -> dict:
+    from Genoly.quantitative.popgen import grm_analysis
+    progress({"stage": "grm"})
+    return grm_analysis(spec["genotypes"],
+                        kinship=spec.get("kinship", "vanraden"),
+                        top_relatives=spec.get("top_relatives", 10))
+
+
 def _crash_test(spec: dict) -> None:
     """Simula distintos tipos de muerte del trabajador (solo tests)."""
     mode = spec.get("mode", "raise")
@@ -412,6 +440,12 @@ def run_job(spec: dict, conn: "mp.connection.Connection") -> None:
             result = _run_report(spec, _progress(conn))
         elif kind == "qdata_clean":
             result = _run_qdata_clean(spec, _progress(conn))
+        elif kind == "crossval":
+            result = _run_crossval(spec, _progress(conn))
+        elif kind == "gwas":
+            result = _run_gwas(spec, _progress(conn))
+        elif kind == "kinship":
+            result = _run_kinship(spec, _progress(conn))
         elif kind == "crash_test":
             _crash_test(spec)
             result = {"ok": True}

@@ -172,6 +172,58 @@ def volcano_svg(fold_changes: Sequence[float], p_values: Sequence[float],
     return "".join(parts)
 
 
+def manhattan_svg(positions: Sequence[float], p_values: Sequence[float],
+                  sig_threshold: float = 5e-8,
+                  title: str = "Manhattan plot") -> str:
+    """
+    Manhattan plot SVG: posición/índice en x, -log10(p) en y. Los puntos
+    por encima de la línea de significancia se resaltan en acento.
+    """
+    pos = np.asarray(positions, dtype=float)
+    pv = np.asarray(p_values, dtype=float)
+    m = min(len(pos), len(pv))
+    pos, pv = pos[:m], pv[:m]
+    if m == 0:
+        return "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'></svg>"
+    pv = np.clip(pv, 1e-300, 1.0)
+    y = -np.log10(pv)
+
+    W, H = 680, 360
+    PL, PR, PT, PB = 46, 14, 34, 40
+    PW, PH = W - PL - PR, H - PT - PB
+    xmin, xmax = float(pos.min()), float(pos.max())
+    xspan = (xmax - xmin) or 1.0
+    ymax = max(float(y.max()), -np.log10(sig_threshold) * 1.2) or 1.0
+    X = lambda v: PL + ((v - xmin) / xspan) * PW
+    Y = lambda v: PT + (1 - v / ymax) * PH
+    sig_line = -np.log10(sig_threshold)
+
+    parts = [f"<svg xmlns='http://www.w3.org/2000/svg' width='{W}' height='{H}' "
+             f"viewBox='0 0 {W} {H}'>",
+             "<rect width='100%' height='100%' fill='#0b1220'/>",
+             f"<text x='{W/2:.0f}' y='20' fill='#c8ffec' font-family='monospace' "
+             f"font-size='13' text-anchor='middle'>{html.escape(title)}</text>"]
+    parts.append(f"<line x1='{PL}' y1='{PT+PH}' x2='{W-PR}' y2='{PT+PH}' stroke='#3a4a58'/>")
+    parts.append(f"<line x1='{PL}' y1='{PT}' x2='{PL}' y2='{PT+PH}' stroke='#3a4a58'/>")
+    parts.append(f"<line x1='{PL}' y1='{Y(sig_line):.1f}' x2='{W-PR}' "
+                 f"y2='{Y(sig_line):.1f}' stroke='#f87171' stroke-dasharray='3 3'/>")
+
+    for i in range(m):
+        sig = pv[i] <= sig_threshold
+        color = "#40e0b2" if sig else "#5a6a78"
+        r = 3.4 if sig else 2.2
+        parts.append(f"<circle cx='{X(pos[i]):.1f}' cy='{Y(y[i]):.1f}' r='{r}' "
+                     f"fill='{color}' fill-opacity='0.85'/>")
+    parts.append(f"<text x='{PL+PW/2:.0f}' y='{H-8}' fill='#8fa3b0' "
+                 f"font-family='monospace' font-size='10' text-anchor='middle'>"
+                 f"marcador</text>")
+    parts.append(f"<text x='14' y='{PT+PH/2:.0f}' fill='#8fa3b0' "
+                 f"font-family='monospace' font-size='10' text-anchor='middle' "
+                 f"transform='rotate(-90 14 {PT+PH/2:.0f})'>-log10(p)</text>")
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 @dataclass
 class Report:
     """Resumen estructurado de un análisis."""
