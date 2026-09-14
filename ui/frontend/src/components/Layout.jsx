@@ -30,6 +30,7 @@ const groups = [
       { to: '/kmer', label: 'K-mers', icon: <IconHash className="h-5 w-5" /> },
       { to: '/map', label: 'Mapeo', icon: <IconTarget className="h-5 w-5" /> },
       { to: '/variants', label: 'Variantes', icon: <IconDna className="h-5 w-5" /> },
+      { to: '/downstream', label: 'Downstream', icon: <IconChart className="h-5 w-5" /> },
       { to: '/quantitative', label: 'Genética cuantitativa', icon: <IconChart className="h-5 w-5" /> },
       { to: '/gblup', label: 'GBLUP', icon: <IconTarget className="h-5 w-5" /> },
     ],

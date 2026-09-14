@@ -260,6 +260,21 @@ def _run_variant_call(spec: dict, progress) -> dict:
     }
 
 
+def _run_downstream(spec: dict, progress) -> dict:
+    """PCA / t-SNE / K-Means sobre una matriz de rasgos (genotipos, etc.)."""
+    from Genoly.downstream.reduction import DownstreamAnalyzer
+    analyzer = DownstreamAnalyzer()
+    return analyzer.run(
+        spec["matrix"],
+        pca_components=spec.get("pca_components", 2),
+        run_tsne=spec.get("run_tsne", True),
+        tsne_perplexity=spec.get("tsne_perplexity", 30.0),
+        tsne_iter=spec.get("tsne_iter", 500),
+        k=spec.get("k", 3),
+        standardize=spec.get("standardize", True),
+        on_progress=progress)
+
+
 def _crash_test(spec: dict) -> None:
     """Simula distintos tipos de muerte del trabajador (solo tests)."""
     mode = spec.get("mode", "raise")
@@ -293,6 +308,8 @@ def run_job(spec: dict, conn: "mp.connection.Connection") -> None:
             result = _run_map(spec, _progress(conn))
         elif kind == "variant_call":
             result = _run_variant_call(spec, _progress(conn))
+        elif kind == "downstream":
+            result = _run_downstream(spec, _progress(conn))
         elif kind == "crash_test":
             _crash_test(spec)
             result = {"ok": True}

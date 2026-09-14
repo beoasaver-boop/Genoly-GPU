@@ -89,6 +89,9 @@ export const api = {
   callVariantsFile: (payload) =>
     request('/variants/call-file', { method: 'POST', body: JSON.stringify(payload) }),
 
+  runDownstream: (payload) =>
+    request('/downstream', { method: 'POST', body: JSON.stringify(payload) }),
+
   downloadUrl: (uploadId) => `${BASE}/upload/${uploadId}/download`,
 
   countKmers: (payload) =>

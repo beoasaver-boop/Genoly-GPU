@@ -6,6 +6,7 @@ import Qc from './pages/Qc.jsx'
 import Fastq from './pages/Fastq.jsx'
 import Kmer from './pages/Kmer.jsx'
 import Map from './pages/Map.jsx'
+import Downstream from './pages/Downstream.jsx'
 import Variants from './pages/Variants.jsx'
 import Quantitative from './pages/Quantitative.jsx'
 import Gblup from './pages/Gblup.jsx'
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/fastq" element={<Fastq />} />
         <Route path="/kmer" element={<Kmer />} />
         <Route path="/map" element={<Map />} />
+        <Route path="/downstream" element={<Downstream />} />
         <Route path="/variants" element={<Variants />} />
         <Route path="/quantitative" element={<Quantitative />} />
         <Route path="/gblup" element={<Gblup />} />
